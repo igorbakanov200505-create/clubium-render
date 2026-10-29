@@ -1,0 +1,103 @@
+{% extends 'base.html' %}
+{% block content %}
+{% set editing = profile is not none %}
+{% set role = profile.role if editing else 'student' %}
+{% set name_parts = profile.display_name.split(' ') if editing else [] %}
+<div class="registration" data-user-registration>
+  <div class="registration-top">
+    <a class="registration-back" href="/users">← К списку пользователей</a>
+    <div class="registration-heading"><span class="registration-tag">УПРАВЛЕНИЕ УЧЁТНЫМИ ЗАПИСЯМИ</span>
+      <h1>{{'Редактирование пользователя' if editing else 'Регистрация пользователя'}}</h1>
+      <p>{{'Обновите ФИО и связанные кружки или детей — пароль останется прежним.' if editing else 'Создайте аккаунт и сразу назначьте нужные кружки, детей и класс.'}}</p>
+    </div>
+  </div>
+  <form method="post" action="{{ '/users/' ~ profile.id ~ '/profile' if editing else '/users/create' }}" id="registrationForm" class="registration-layout">
+    <input type="hidden" name="_csrf" value="{{csrf}}">
+    <div class="registration-main">
+      <section class="registration-panel" aria-labelledby="roleHeading">
+        <div class="registration-section-head"><span class="registration-step">01</span><div><h2 id="roleHeading">Выберите роль</h2><p>Поля ниже автоматически подстроятся под неё.</p></div></div>
+        {% if editing %}
+          <input type="hidden" name="role" value="{{role}}">
+          <p class="registration-fixed-role">Роль этого аккаунта: <strong>{{{'admin':'Администратор','teacher':'Учитель','parent':'Родитель','student':'Ученик'}[role]}}</strong>. Для безопасности она не меняется при редактировании.</p>
+        {% else %}
+          <div class="registration-roles" role="radiogroup" aria-label="Роль пользователя">
+            <label class="registration-role"><input type="radio" name="role" value="student" checked><span class="role-icon">🎓</span><strong>Ученик</strong><small>Класс, группа и кружки</small></label>
+            <label class="registration-role"><input type="radio" name="role" value="parent"><span class="role-icon">👨‍👩‍👧‍👦</span><strong>Родитель</strong><small>Несколько детей</small></label>
+            <label class="registration-role"><input type="radio" name="role" value="teacher"><span class="role-icon">📚</span><strong>Учитель</strong><small>Несколько кружков</small></label>
+            <label class="registration-role"><input type="radio" name="role" value="admin"><span class="role-icon">🛡️</span><strong>Администратор</strong><small>Без дополнительных полей</small></label>
+          </div>
+        {% endif %}
+      </section>
+      <section class="registration-panel" aria-labelledby="personHeading">
+        <div class="registration-section-head"><span class="registration-step">02</span><div><h2 id="personHeading">Личные данные</h2><p>Фамилия, имя и отчество заполняются отдельно.</p></div></div>
+        <div class="registration-fields three-fields">
+          <label>Фамилия <span class="field-required">*</span><input name="last_name" required maxlength="70" autocomplete="family-name" placeholder="Иванов" value="{{profile.last_name or (name_parts[0] if name_parts else '') if editing else ''}}"></label>
+          <label>Имя <span class="field-required">*</span><input name="first_name" required maxlength="70" autocomplete="given-name" placeholder="Алексей" value="{{profile.first_name or (name_parts[1] if name_parts|length > 1 else '') if editing else ''}}"></label>
+          <label>Отчество <span class="registration-optional">необязательно</span><input name="patronymic" maxlength="70" placeholder="Сергеевич" value="{{profile.patronymic or (name_parts[2] if name_parts|length > 2 else '') if editing else ''}}"></label>
+        </div>
+        {% if editing %}<p class="registration-footnote">Аккаунт: <strong>@{{profile.username}}</strong></p>{% else %}
+        <div class="registration-fields two-fields registration-credentials">
+          <label>Логин <span class="field-required">*</span><input name="username" required minlength="3" maxlength="50" pattern="[A-Za-z0-9._-]{3,50}" autocomplete="off" placeholder="ivanov_alexey"><small>Латиница, цифры, точка, дефис, подчёркивание</small></label>
+          <label>Временный пароль <span class="field-required">*</span><span class="registration-password"><input id="newPasswordInput" name="new_password" type="password" required minlength="12" autocomplete="new-password" placeholder="Не менее 12 символов"><button type="button" class="registration-show" data-toggle-password="newPasswordInput" aria-label="Показать пароль">Показать</button></span><small>Пользователь сменит его при первом входе</small></label>
+        </div>{% endif %}
+      </section>
+      <section class="registration-panel registration-dynamic" data-role-panel="student" {% if role!='student' %}hidden{% endif %} aria-labelledby="studentHeading">
+        <div class="registration-section-head"><span class="registration-step">03</span><div><h2 id="studentHeading">Настройки ученика</h2><p>Укажите класс и запишите ученика сразу в несколько кружков.</p></div></div>
+        {% if student %}<div class="registration-note">Связана существующая карточка ученика №{{student.id}}. Достижения и посещаемость сохранятся.</div>
+        {% else %}
+        <label class="registration-wide">Связать с уже созданной карточкой ученика
+          <select name="existing_student_id" data-existing-student>
+            <option value="0">Создать новую карточку ученика</option>
+            {% for existing in existing_students %}<option value="{{existing.id}}">{{existing.fullname}} · {{existing.school_class}}</option>{% endfor %}
+          </select>
+          <small>Если ученика ранее добавили в разделе «Учащиеся», выберите его здесь, чтобы не создавать дубль.</small>
+        </label>
+        {% endif %}
+        <div class="registration-fields two-fields registration-credentials">
+          <label>Класс <span class="field-required">*</span><input name="school_class" maxlength="20" placeholder="Например, 7А" value="{{student.school_class if student else ''}}" data-school-class></label>
+          <label>Группа <span class="registration-optional">необязательно</span><input name="school_group" maxlength="80" placeholder="Например, группа № 2" value="{{student.school_group if student else ''}}"></label>
+        </div>
+        <div class="registration-checklist-head"><div><strong>Кружки ученика</strong><small>Можно выбрать несколько одновременно</small></div><span class="registration-selected" data-count-for="student-clubs">0 выбрано</span></div>
+        <div class="registration-option-list" data-select-group="student-clubs">
+          {% for club in clubs %}<label class="registration-option"><input type="checkbox" name="club_ids_form" value="{{club.id}}" {% if club.id in selected_clubs %}checked{% endif %}><span><strong>{{club.title}}</strong><small>{{club.direction}}</small></span></label>{% else %}<p class="registration-no-data">Кружков пока нет. Их можно назначить позднее в разделе «Пользователи».</p>{% endfor %}
+        </div>
+        <label class="registration-wide registration-parent-choice">Родитель ученика
+          <select name="parent_user_id"><option value="0">Не назначен</option>
+            {% for p in parents %}<option value="{{p.id}}" {% if student and student.parent_user_id==p.id %}selected{% endif %}>{{p.display_name}}</option>{% endfor %}
+          </select><small>Можно выбрать родителя сейчас или привязать позже через его профиль.</small>
+        </label>
+      </section>
+      <section class="registration-panel registration-dynamic" data-role-panel="teacher" {% if role!='teacher' %}hidden{% endif %} aria-labelledby="teacherHeading">
+        <div class="registration-section-head"><span class="registration-step">03</span><div><h2 id="teacherHeading">Кружки учителя</h2><p>Выберите все кружки, которые будет вести преподаватель.</p></div></div>
+        <div class="registration-checklist-head"><strong>Доступные кружки</strong><span class="registration-selected" data-count-for="teacher-clubs">0 выбрано</span></div>
+        <label class="registration-search-label">Поиск кружка <input type="search" placeholder="Начните вводить название…" data-list-search="teacher-clubs"></label>
+        <div class="registration-option-list" data-select-group="teacher-clubs">
+          {% for club in teacher_clubs %}<label class="registration-option"><input type="checkbox" name="club_ids_form" value="{{club.id}}" {% if club.id in selected_clubs %}checked{% endif %}><span><strong>{{club.title}}</strong><small>{{club.direction}}</small></span></label>{% else %}<p class="registration-no-data">Доступных кружков пока нет. Создайте кружок или освободите его от прежнего учителя.</p>{% endfor %}
+        </div>
+        <p class="registration-footnote">В одном кружке сейчас может быть один ответственный учитель. Уже назначенные другим преподавателям кружки не предлагаются.</p>
+      </section>
+      <section class="registration-panel registration-dynamic" data-role-panel="parent" {% if role!='parent' %}hidden{% endif %} aria-labelledby="parentHeading">
+        <div class="registration-section-head"><span class="registration-step">03</span><div><h2 id="parentHeading">Дети родителя</h2><p>Привяжите одного или сразу нескольких учеников.</p></div></div>
+        <div class="registration-checklist-head"><strong>Учащиеся</strong><span class="registration-selected" data-count-for="parent-children">0 выбрано</span></div>
+        <label class="registration-search-label">Поиск ученика <input type="search" placeholder="Фамилия или класс…" data-list-search="parent-children"></label>
+        <div class="registration-option-list" data-select-group="parent-children">
+          {% for child in children %}<label class="registration-option"><input type="checkbox" name="child_ids" value="{{child.id}}" {% if child.id in selected_students %}checked{% endif %}><span><strong>{{child.fullname}}</strong><small>{{child.school_class}}{% if child.school_group %} · {{child.school_group}}{% endif %}</small></span></label>{% else %}<p class="registration-no-data">Учеников пока нет. Создайте их сначала или привяжите позже.</p>{% endfor %}
+        </div>
+        <p class="registration-footnote">Показаны дети без назначенного родителя и уже связанные с этим аккаунтом. Назначения других родителей не меняются.</p>
+      </section>
+      <section class="registration-panel registration-dynamic" data-role-panel="admin" {% if role!='admin' %}hidden{% endif %}>
+        <div class="registration-section-head"><span class="registration-step">03</span><div><h2>Доступ администратора</h2><p>Дополнительные поля не требуются.</p></div></div>
+        <div class="registration-note">Администратор сможет управлять пользователями, школьными кружками и отчётами в пределах прав системы.</div>
+      </section>
+    </div>
+    <aside class="registration-aside"><div class="registration-summary"><div class="registration-summary-icon">✦</div><h3>{{'Сохранение изменений' if editing else 'Новый аккаунт ÜiirmeHub'}}</h3>
+      <p data-registration-summary>Ученик · заполните данные и выберите кружки.</p>
+      <div class="registration-summary-line"><span>Авторизация</span><strong>{{'Пароль не меняется' if editing else 'Смена пароля при входе'}}</strong></div>
+      <div class="registration-summary-line"><span>Доступ</span><strong>По выбранной роли</strong></div>
+      <button class="btn primary full" type="submit">{{'Сохранить изменения' if editing else 'Зарегистрировать пользователя'}} →</button>
+      <a class="btn subtle full" href="/users">Отмена</a>
+      <p class="registration-footnote">Все назначения сохраняются вместе с аккаунтом. Если возникнет ошибка, неполные данные не будут записаны.</p>
+    </div></aside>
+  </form>
+</div>
+{% endblock %}

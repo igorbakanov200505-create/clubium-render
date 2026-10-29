@@ -252,6 +252,14 @@ with conn() as db:
     if 'is_service_admin' not in {col['name'] for col in db.execute('PRAGMA table_info(users)').fetchall()}:
         db.execute('ALTER TABLE users ADD COLUMN is_service_admin INTEGER NOT NULL DEFAULT 0 CHECK(is_service_admin IN (0,1))')
     db.execute('CREATE UNIQUE INDEX IF NOT EXISTS one_service_admin ON users(is_service_admin) WHERE is_service_admin = 1')
+    # Add new optional fields without removing old account, class or enrollment data.
+    user_columns={c['name'] for c in db.execute('PRAGMA table_info(users)')}
+    for column in ('last_name', 'first_name', 'patronymic'):
+        if column not in user_columns:
+            db.execute(f"ALTER TABLE users ADD COLUMN {column} TEXT NOT NULL DEFAULT ''")
+    student_columns={c['name'] for c in db.execute('PRAGMA table_info(students)')}
+    if 'school_group' not in student_columns:
+        db.execute("ALTER TABLE students ADD COLUMN school_group TEXT NOT NULL DEFAULT ''")
 
 def rows(sql, params=()):
     with conn() as db:
@@ -827,21 +835,179 @@ def export(request:Request,kind:str,club_id:int=0,start:str='',end:str=''):
 @app.get('/users')
 def users_page(request:Request):
     u=require(request,('admin',))
-    return render(request,'users',page_title='Учётные записи',accounts=rows('SELECT id,username,display_name,role,active,must_change_password,created_at FROM users WHERE is_service_admin=0 ORDER BY CASE role WHEN "admin" THEN 0 ELSE 1 END,username'))
+    accounts=rows('SELECT id,username,display_name,role,active,must_change_password,created_at FROM users WHERE is_service_admin=0 ORDER BY CASE role WHEN "admin" THEN 0 ELSE 1 END,username')
+    for item in accounts:
+        id=item['id']
+        if item['role']=='teacher':
+            linked=rows('SELECT title FROM clubs WHERE teacher_id=? ORDER BY title',(id,))
+            item['links']=', '.join(x['title'] for x in linked) or 'Кружки ещё не назначены'
+        elif item['role']=='parent':
+            linked=rows('SELECT fullname FROM students WHERE parent_user_id=? ORDER BY fullname',(id,))
+            item['links']=', '.join(x['fullname'] for x in linked) or 'Дети ещё не привязаны'
+        elif item['role']=='student':
+            st=one('SELECT id,school_class,school_group FROM students WHERE student_user_id=? ORDER BY id LIMIT 1',(id,))
+            if st:
+                linked=rows('SELECT c.title FROM clubs c JOIN enrollments e ON e.club_id=c.id WHERE e.student_id=? ORDER BY c.title',(st['id'],))
+                item['links']=f"{st['school_class']} класс"+(f" · {st['school_group']}" if st['school_group'] else '')+(' · '+', '.join(x['title'] for x in linked) if linked else '')
+            else:
+                item['links']='Карточка ученика ещё не привязана'
+        else:item['links']='Полный доступ'
+    return render(request,'users',page_title='Учётные записи',accounts=accounts)
+
+
+def user_form_response(request, target=None):
+    """Dedicated staff-only account form with role-specific, multiple assignments."""
+    admin=require(request,('admin',))
+    profile=None; student=None; selected_clubs=[]; selected_students=[]
+    if target is not None:
+        profile=one('SELECT * FROM users WHERE id=? AND is_service_admin=0',(target,))
+        if not profile:raise HTTPException(404,'Аккаунт не найден')
+        if profile['role']=='teacher':
+            selected_clubs=[x['id'] for x in rows('SELECT id FROM clubs WHERE teacher_id=?',(target,))]
+        elif profile['role']=='parent':
+            selected_students=[x['id'] for x in rows('SELECT id FROM students WHERE parent_user_id=?',(target,))]
+        elif profile['role']=='student':
+            student=one('SELECT * FROM students WHERE student_user_id=? ORDER BY id LIMIT 1',(target,))
+            if student:selected_clubs=[x['club_id'] for x in rows('SELECT club_id FROM enrollments WHERE student_id=?',(student['id'],))]
+    clubs=rows('SELECT id,title,direction,teacher_id FROM clubs WHERE teacher_id IS NULL OR teacher_id=? ORDER BY title',(target or -1,))
+    all_clubs=rows('SELECT id,title,direction FROM clubs ORDER BY title')
+    children=rows('SELECT id,fullname,school_class,school_group,parent_user_id,student_user_id FROM students WHERE parent_user_id IS NULL OR parent_user_id=? ORDER BY fullname',(target or -1,))
+    existing_students=rows('SELECT id,fullname,school_class,school_group FROM students WHERE student_user_id IS NULL OR student_user_id=? ORDER BY fullname',(target or -1,))
+    parents=rows("SELECT id,display_name FROM users WHERE role='parent' AND active=1 ORDER BY display_name")
+    data=dict(request=request,user=admin,csrf=csrf(request),notice=request.session.pop('notice',None),current='users',page_title='Редактирование аккаунта' if target is not None else 'Регистрация пользователя',profile=profile,student=student,
+              selected_clubs=selected_clubs,selected_students=selected_students,teacher_clubs=clubs,clubs=all_clubs,children=children,existing_students=existing_students,parents=parents)
+    return templates.TemplateResponse(request,'user_form.html',data)
+
+
+@app.get('/users/new')
+def users_new(request:Request):
+    return user_form_response(request)
+
+
+@app.get('/users/{target}/edit')
+def users_edit(request:Request,target:int):
+    return user_form_response(request,target)
+
+
+def validate_registration(role,last_name,first_name,patronymic,school_class,school_group,club_ids_form,child_ids,existing_student_id,parent_user_id):
+    """Validate IDs and relationship ownership; writes happen in one transaction."""
+    if role not in ('admin','teacher','parent','student'):
+        raise HTTPException(400,'Неверная роль')
+    last_name=clean(last_name,70).strip()
+    first_name=clean(first_name,70).strip()
+    patronymic=clean(patronymic,70).strip()
+    if not last_name or not first_name:raise HTTPException(400,'Введите фамилию и имя')
+    if len(last_name)>70 or len(first_name)>70 or len(patronymic)>70:
+        raise HTTPException(400,'Слишком длинное ФИО')
+    club_ids={int(x) for x in club_ids_form}
+    child_ids={int(x) for x in child_ids}
+    if len(club_ids)>250 or len(child_ids)>500:raise HTTPException(400,'Слишком много выбранных записей')
+    school_class=clean(school_class,20).strip();school_group=clean(school_group,80).strip()
+    if role=='student' and not school_class and not existing_student_id:
+        raise HTTPException(400,'Укажите класс ученика')
+    if role!='student' and existing_student_id:raise HTTPException(400,'Неверная карточка ученика')
+    if role!='student' and parent_user_id:raise HTTPException(400,'Родитель может быть выбран только для ученика')
+    if role=='admin' and (club_ids or child_ids):raise HTTPException(400,'Для администратора дополнительные назначения не нужны')
+    if role=='teacher' and child_ids:raise HTTPException(400,'Для учителя можно выбирать только кружки')
+    if role=='parent' and club_ids:raise HTTPException(400,'Для родителя можно выбирать только детей')
+    if role=='student' and child_ids:raise HTTPException(400,'Для ученика можно выбирать только кружки')
+    return last_name,first_name,patronymic,school_class,school_group,club_ids,child_ids
+
+
+def save_user_profile(request, target, username, new_password, role, last_name, first_name, patronymic, school_class, school_group, club_ids_form, child_ids, existing_student_id, parent_user_id):
+    admin=require(request,('admin',))
+    username=clean(username,50).lower().strip()
+    if target is None:
+        if username=='azraellone':raise HTTPException(400,'Этот логин зарезервирован системой')
+        if not (3<=len(username)<=50) or not all(ch.isascii() and (ch.isalnum() or ch in '._-') for ch in username):
+            raise HTTPException(400,'Логин: 3–50 латинских символов, цифры, . _ -')
+        if len(new_password)<12:raise HTTPException(400,'Временный пароль: минимум 12 символов')
+    last_name,first_name,patronymic,school_class,school_group,clubs,children=validate_registration(
+        role,last_name,first_name,patronymic,school_class,school_group,club_ids_form,child_ids,existing_student_id,parent_user_id)
+    fullname=' '.join(filter(None,(last_name,first_name,patronymic)))
+    try:
+        with conn() as db:
+            if target is None:
+                cursor=db.execute('INSERT INTO users(username,display_name,password_hash,role,last_name,first_name,patronymic) VALUES(?,?,?,?,?,?,?)',
+                       (username,fullname,password_hash(new_password),role,last_name,first_name,patronymic))
+                uid=cursor.lastrowid
+            else:
+                profile=db.execute('SELECT id,role FROM users WHERE id=? AND is_service_admin=0',(target,)).fetchone()
+                if not profile:raise HTTPException(404,'Аккаунт не найден')
+                if profile['role'] != role:raise HTTPException(400,'Нельзя изменить роль существующей учётной записи')
+                uid=target
+                db.execute('UPDATE users SET display_name=?,last_name=?,first_name=?,patronymic=? WHERE id=?',
+                           (fullname,last_name,first_name,patronymic,uid))
+            if role=='teacher':
+                # The club has one responsible teacher; do not silently steal another teacher's club.
+                for cid in clubs:
+                    c=db.execute('SELECT teacher_id FROM clubs WHERE id=?',(cid,)).fetchone()
+                    if not c or (c['teacher_id'] is not None and c['teacher_id']!=uid):
+                        raise HTTPException(400,'Один из кружков уже назначен другому учителю')
+                if target is not None:db.execute('UPDATE clubs SET teacher_id=NULL WHERE teacher_id=?',(uid,))
+                for cid in clubs:db.execute('UPDATE clubs SET teacher_id=? WHERE id=?',(uid,cid))
+            elif role=='parent':
+                for sid in children:
+                    st=db.execute('SELECT parent_user_id FROM students WHERE id=?',(sid,)).fetchone()
+                    if not st or (st['parent_user_id'] is not None and st['parent_user_id']!=uid):
+                        raise HTTPException(400,'Один из детей уже связан с другим родителем')
+                if target is not None:db.execute('UPDATE students SET parent_user_id=NULL WHERE parent_user_id=?',(uid,))
+                for sid in children:db.execute('UPDATE students SET parent_user_id=? WHERE id=?',(uid,sid))
+            elif role=='student':
+                sid=None
+                previous=db.execute('SELECT id,school_class,school_group FROM students WHERE student_user_id=? LIMIT 1',(uid,)).fetchone()
+                if previous:
+                    sid=previous['id']
+                    if existing_student_id and existing_student_id!=sid:
+                        raise HTTPException(400,'Нельзя переключить уже связанную карточку ученика')
+                elif existing_student_id:
+                    st=db.execute('SELECT student_user_id FROM students WHERE id=?',(existing_student_id,)).fetchone()
+                    if not st or (st['student_user_id'] is not None and st['student_user_id']!=uid):
+                        raise HTTPException(400,'Карточка ученика уже связана с другим аккаунтом')
+                    sid=existing_student_id
+                if parent_user_id:
+                    p=db.execute("SELECT id FROM users WHERE id=? AND role='parent' AND active=1",(parent_user_id,)).fetchone()
+                    if not p:raise HTTPException(400,'Выбранный родитель не найден или отключён')
+                if sid is None:
+                    if not school_class:raise HTTPException(400,'Укажите класс ученика')
+                    sid=db.execute('INSERT INTO students(fullname,school_class,school_group,student_user_id,parent_user_id) VALUES(?,?,?,?,?)',
+                                   (fullname,school_class,school_group,uid,parent_user_id or None)).lastrowid
+                else:
+                    st=db.execute('SELECT school_class,school_group,parent_user_id FROM students WHERE id=?',(sid,)).fetchone()
+                    # Existing student profiles may already be associated with a parent.
+                    # Linking a login without explicitly choosing a parent must not erase that link.
+                    assigned_parent = parent_user_id or (st['parent_user_id'] if target is None else None)
+                    assigned_group = school_group if target is not None or school_group else st['school_group']
+                    db.execute('UPDATE students SET fullname=?,school_class=?,school_group=?,parent_user_id=?,student_user_id=? WHERE id=?',
+                        (fullname,school_class or st['school_class'],assigned_group,assigned_parent,uid,sid))
+                for cid in clubs:
+                    if not db.execute('SELECT 1 FROM clubs WHERE id=?',(cid,)).fetchone():
+                        raise HTTPException(400,'Один из кружков не найден')
+                db.execute('DELETE FROM enrollments WHERE student_id=?',(sid,))
+                for cid in clubs:db.execute('INSERT INTO enrollments(club_id,student_id) VALUES(?,?)',(cid,sid))
+            db.execute('INSERT INTO audit_log(user_id,action,details) VALUES(?,?,?)',
+                       (admin['id'],'user_profile_update' if target is not None else 'user_create',f'{uid} {role}'[:250]))
+    except sqlite3.IntegrityError as exc:
+        if 'users.username' in str(exc):raise HTTPException(400,'Такой логин уже существует') from exc
+        raise HTTPException(400,'Конфликт данных. Проверьте выбранные записи.') from exc
+    flash(request,'Данные пользователя обновлены' if target is not None else 'Аккаунт создан. При первом входе пользователь сменит пароль.')
+    return go('/users')
+
 
 @app.post('/users/create')
-def users_create(request:Request,csrf_token:str=Form('', alias='_csrf'),username:str=Form(''),display_name:str=Form(''),role:str=Form('teacher'),new_password:str=Form('')):
-    u=require(request,('admin',));check_csrf(request,csrf_token)
-    username=clean(username,50).lower().strip()
-    if username=='azraellone':raise HTTPException(400,'Этот логин зарезервирован системой')
-    if not (3<=len(username)<=50) or not all(ch.isascii() and (ch.isalnum() or ch in '._-') for ch in username):raise HTTPException(400,'Логин: 3–50 латинских символов, цифры, . _ -')
-    if role not in ('admin','teacher','parent','student'):raise HTTPException(400,'Неверная роль')
-    if len(new_password)<12:raise HTTPException(400,'Пароль: минимум 12 символов')
-    if not clean(display_name):raise HTTPException(400,'Введите имя')
-    try:
-        id=run('INSERT INTO users(username,display_name,password_hash,role) VALUES(?,?,?,?)',(username,clean(display_name,100),password_hash(new_password),role))
-    except sqlite3.IntegrityError:raise HTTPException(400,'Логин уже существует')
-    log(u,'user_create',f'{id} {username}');flash(request,'Аккаунт создан. При первом входе пользователь сменит пароль.');return go('/users')
+def users_create(request:Request,csrf_token:str=Form('', alias='_csrf'),username:str=Form(''),new_password:str=Form(''),role:str=Form('teacher'),
+                 last_name:str=Form(''),first_name:str=Form(''),patronymic:str=Form(''),school_class:str=Form(''),school_group:str=Form(''),
+                 club_ids_form:list[int]=Form(default=[]),child_ids:list[int]=Form(default=[]),existing_student_id:int=Form(0),parent_user_id:int=Form(0)):
+    check_csrf(request,csrf_token)
+    return save_user_profile(request,None,username,new_password,role,last_name,first_name,patronymic,school_class,school_group,club_ids_form,child_ids,existing_student_id,parent_user_id)
+
+
+@app.post('/users/{target}/profile')
+def users_profile_update(request:Request,target:int,csrf_token:str=Form('', alias='_csrf'),role:str=Form(''),
+                 last_name:str=Form(''),first_name:str=Form(''),patronymic:str=Form(''),school_class:str=Form(''),school_group:str=Form(''),
+                 club_ids_form:list[int]=Form(default=[]),child_ids:list[int]=Form(default=[]),existing_student_id:int=Form(0),parent_user_id:int=Form(0)):
+    check_csrf(request,csrf_token)
+    return save_user_profile(request,target,'','',role,last_name,first_name,patronymic,school_class,school_group,club_ids_form,child_ids,existing_student_id,parent_user_id)
 
 @app.post('/users/{target}/reset')
 def user_reset(request:Request,target:int,csrf_token:str=Form('', alias='_csrf'),new_password:str=Form('')):
