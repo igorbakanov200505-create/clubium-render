@@ -12,6 +12,8 @@ import io
 import json
 import os
 import secrets
+import re
+import unicodedata
 import sqlite3
 import time
 import uuid
@@ -914,23 +916,68 @@ def validate_registration(role,last_name,first_name,patronymic,school_class,scho
     return last_name,first_name,patronymic,school_class,school_group,club_ids,child_ids
 
 
+# ÜiirmeHub: login based on surname + given name + numeric suffix.
+# The final value is always checked against SQLite's unique username constraint.
+_RU_LOGIN_CHARS = {
+    'а':'a','б':'b','в':'v','г':'g','д':'d','е':'e','ё':'yo','ж':'zh','з':'z','и':'i','й':'i',
+    'к':'k','л':'l','м':'m','н':'n','о':'o','п':'p','р':'r','с':'s','т':'t','у':'u','ф':'f',
+    'х':'kh','ц':'ts','ч':'ch','ш':'sh','щ':'shch','ъ':'','ы':'y','ь':'','э':'e','ю':'yu','я':'ya',
+    'ә':'a','ғ':'gh','қ':'q','ң':'ng','ө':'o','ұ':'u','ү':'u','һ':'h','і':'i',
+}
+
+
+def _login_piece(name, max_length):
+    word=''.join(_RU_LOGIN_CHARS.get(ch,ch) for ch in clean(name,70).lower())
+    word=unicodedata.normalize('NFKD',word)
+    word=''.join(ch for ch in word if ord(ch)<128 and (ch.isascii() and ch.isalnum()))
+    return word[:max_length] or 'user'
+
+
+def _login_prefix(last_name, first_name):
+    return _login_piece(last_name,20)+'.'+_login_piece(first_name,18)+'.'
+
+
+def _temporary_password():
+    # 20 randomly chosen characters: ~118 bits, no confusing 0/O/1/I.
+    chars='ABCDEFGHJKLMNPQRSTUVWXYZabcdefghjkmnpqrstuvwxyz23456789'
+    return ''.join(secrets.choice(chars) for _ in range(20))
+
+
+def _generated_login(prefix, suggested='', attempt=0):
+    # Respect the preview only when it matches the server-side transliteration.
+    if attempt==0 and re.fullmatch(re.escape(prefix)+r'[0-9]{4,8}',suggested or ''):
+        return suggested
+    n=4 if attempt<9 else 8
+    return prefix+str(secrets.randbelow(10**n)).zfill(n)
+
+
 def save_user_profile(request, target, username, new_password, role, last_name, first_name, patronymic, school_class, school_group, club_ids_form, child_ids, existing_student_id, parent_user_id):
     admin=require(request,('admin',))
-    username=clean(username,50).lower().strip()
-    if target is None:
-        if username=='azraellone':raise HTTPException(400,'Этот логин зарезервирован системой')
-        if not (3<=len(username)<=50) or not all(ch.isascii() and (ch.isalnum() or ch in '._-') for ch in username):
-            raise HTTPException(400,'Логин: 3–50 латинских символов, цифры, . _ -')
-        if len(new_password)<12:raise HTTPException(400,'Временный пароль: минимум 12 символов')
+    # New accounts always get server-generated credentials. No predictable name-based passwords.
+    username=clean(username,50).lower().strip() if target is None else ''
+    generated_password=_temporary_password() if target is None else None
     last_name,first_name,patronymic,school_class,school_group,clubs,children=validate_registration(
         role,last_name,first_name,patronymic,school_class,school_group,club_ids_form,child_ids,existing_student_id,parent_user_id)
     fullname=' '.join(filter(None,(last_name,first_name,patronymic)))
     try:
         with conn() as db:
             if target is None:
-                cursor=db.execute('INSERT INTO users(username,display_name,password_hash,role,last_name,first_name,patronymic) VALUES(?,?,?,?,?,?,?)',
-                       (username,fullname,password_hash(new_password),role,last_name,first_name,patronymic))
-                uid=cursor.lastrowid
+                prefix=_login_prefix(last_name,first_name)
+                hashed_password=password_hash(generated_password)
+                # Database uniqueness is authoritative, including simultaneous admin requests.
+                for attempt in range(20):
+                    candidate=_generated_login(prefix,username,attempt)
+                    try:
+                        cursor=db.execute('INSERT INTO users(username,display_name,password_hash,role,last_name,first_name,patronymic) VALUES(?,?,?,?,?,?,?)',
+                               (candidate,fullname,hashed_password,role,last_name,first_name,patronymic))
+                        username=candidate
+                        uid=cursor.lastrowid
+                        break
+                    except sqlite3.IntegrityError as exc:
+                        if 'users.username' not in str(exc):
+                            raise
+                else:
+                    raise HTTPException(409,'Не удалось подобрать свободный логин. Попробуйте ещё раз.')
             else:
                 profile=db.execute('SELECT id,role FROM users WHERE id=? AND is_service_admin=0',(target,)).fetchone()
                 if not profile:raise HTTPException(404,'Аккаунт не найден')
@@ -990,7 +1037,19 @@ def save_user_profile(request, target, username, new_password, role, last_name, 
     except sqlite3.IntegrityError as exc:
         if 'users.username' in str(exc):raise HTTPException(400,'Такой логин уже существует') from exc
         raise HTTPException(400,'Конфликт данных. Проверьте выбранные записи.') from exc
-    flash(request,'Данные пользователя обновлены' if target is not None else 'Аккаунт создан. При первом входе пользователь сменит пароль.')
+    if target is None:
+        # One-time HTML response. Never store or print the plaintext credential in
+        # session cookies, the database, GitHub backups, URLs or audit logs.
+        response=templates.TemplateResponse(request,'user_credentials.html',dict(
+            request=request,user=admin,csrf=csrf(request),notice=None,current='users',
+            page_title='Данные нового пользователя',account_name=fullname,
+            account_role=role,account_username=username,temporary_password=generated_password))
+        response.headers['Cache-Control']='no-store, no-cache, private, max-age=0'
+        response.headers['Pragma']='no-cache'
+        response.headers['Referrer-Policy']='no-referrer'
+        response.headers['X-Robots-Tag']='noindex, noarchive'
+        return response
+    flash(request,'Данные пользователя обновлены')
     return go('/users')
 
 
@@ -1031,7 +1090,7 @@ async def security_headers(request:Request,call_next):
     response = await call_next(request)
     response.headers['X-Content-Type-Options']='nosniff'
     response.headers['X-Frame-Options']='DENY'
-    response.headers['Referrer-Policy']='strict-origin-when-cross-origin'
+    response.headers['Referrer-Policy']='no-referrer' if request.url.path=='/users/create' else 'strict-origin-when-cross-origin'
     response.headers['Permissions-Policy']='camera=(), microphone=(), geolocation=()'
     if request.url.path.startswith(('/api/','/users','/students','/portfolio','/attendance')):
         response.headers['Cache-Control']='no-store'

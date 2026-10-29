@@ -63,3 +63,17 @@
 .registration-summary .registration-footnote{margin-top:15px;font-size:11px}
 @media(max-width:1100px){.registration-layout{grid-template-columns:1fr}.registration-aside{position:static}.registration-roles{grid-template-columns:repeat(2,minmax(0,1fr))}}
 @media(max-width:650px){.registration-panel,.registration-summary{padding:17px;border-radius:15px}.registration-fields.three-fields,.registration-fields.two-fields,.registration-option-list{grid-template-columns:1fr}.registration-section-head{gap:11px}.registration-roles{grid-template-columns:repeat(2,minmax(0,1fr))}.registration-role{min-height:105px;padding:12px}.registration-heading h1{font-size:27px}}
+
+/* Safe, automatically generated account credentials. */
+.registration-login-line{display:flex;gap:10px;align-items:stretch}
+.registration-login-line input{flex:1;min-width:0;font-family:ui-monospace,SFMono-Regular,Consolas,monospace}
+.registration-login-line button{flex-shrink:0;white-space:nowrap}
+.registration-secret-note{margin-top:12px}
+.registration-credential-card{max-width:800px;margin:0 auto;padding:10px 0 35px}
+.registration-credential-row{display:flex;gap:12px;align-items:center;margin:16px 0;flex-wrap:wrap}
+.registration-credential-row strong{flex:1;min-width:0;overflow-wrap:anywhere;font:700 19px/1.5 ui-monospace,SFMono-Regular,Consolas,monospace;color:#f3fbff}
+.registration-credential-row button{flex-shrink:0}
+.registration-credential-warning{padding:16px;border-radius:12px;border:1px solid rgba(238,194,111,.35);background:rgba(187,117,35,.12);line-height:1.6;color:#f2d5a7;margin:20px 0}
+.registration-credentials-card-label{font-size:13px;color:#9db4ca;font-weight:700}
+.registration-secret-field{display:none}
+@media(max-width:650px){.registration-login-line{flex-direction:column}.registration-login-line button{width:100%}}

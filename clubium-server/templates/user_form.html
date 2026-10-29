@@ -36,9 +36,12 @@
           <label>Отчество <span class="registration-optional">необязательно</span><input name="patronymic" maxlength="70" placeholder="Сергеевич" value="{{profile.patronymic or (name_parts[2] if name_parts|length > 2 else '') if editing else ''}}"></label>
         </div>
         {% if editing %}<p class="registration-footnote">Аккаунт: <strong>@{{profile.username}}</strong></p>{% else %}
-        <div class="registration-fields two-fields registration-credentials">
-          <label>Логин <span class="field-required">*</span><input name="username" required minlength="3" maxlength="50" pattern="[A-Za-z0-9._-]{3,50}" autocomplete="off" placeholder="ivanov_alexey"><small>Латиница, цифры, точка, дефис, подчёркивание</small></label>
-          <label>Временный пароль <span class="field-required">*</span><span class="registration-password"><input id="newPasswordInput" name="new_password" type="password" required minlength="12" autocomplete="new-password" placeholder="Не менее 12 символов"><button type="button" class="registration-show" data-toggle-password="newPasswordInput" aria-label="Показать пароль">Показать</button></span><small>Пользователь сменит его при первом входе</small></label>
+        <div class="registration-fields registration-credentials">
+          <label>Логин — подбирается автоматически
+            <span class="registration-login-line"><input name="username" data-generated-login readonly autocomplete="off" placeholder="Укажите фамилию и имя"><button type="button" class="btn subtle" data-regenerate-login>↻ Новый логин</button></span>
+            <small>Фамилия + имя латиницей + случайные цифры. Сервер проверит уникальность перед сохранением.</small>
+          </label>
+          <p class="registration-note registration-secret-note">🔐 Временный пароль будет создан безопасно на сервере и показан только один раз после регистрации. Пользователь сменит его при первом входе.</p>
         </div>{% endif %}
       </section>
       <section class="registration-panel registration-dynamic" data-role-panel="student" {% if role!='student' %}hidden{% endif %} aria-labelledby="studentHeading">
