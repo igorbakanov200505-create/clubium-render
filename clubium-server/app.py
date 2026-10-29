@@ -38,11 +38,18 @@ INSTANCE = Path(os.environ.get('SMARTCLUB_DATA_DIR') or str(ROOT / 'instance'))
 INSTANCE.mkdir(parents=True, exist_ok=True)
 DB = INSTANCE / 'smartclub.sqlite3'
 KEYFILE = INSTANCE / 'secret.key'
-if not KEYFILE.exists():
-    KEYFILE.write_text(secrets.token_urlsafe(48), encoding='utf-8')
-    try: KEYFILE.chmod(0o600)
-    except OSError: pass
-SECRET = KEYFILE.read_text(encoding='utf-8').strip()
+# For ephemeral cloud hosts, configure CLUBIUM_SESSION_SECRET as a persistent
+# secret environment variable. Otherwise a new container invalidates cookies.
+SESSION_SECRET = os.environ.get('CLUBIUM_SESSION_SECRET', '').strip()
+if SESSION_SECRET and len(SESSION_SECRET) < 32:
+    raise RuntimeError('CLUBIUM_SESSION_SECRET must be at least 32 characters')
+if not SESSION_SECRET:
+    if not KEYFILE.exists():
+        KEYFILE.write_text(secrets.token_urlsafe(48), encoding='utf-8')
+        try: KEYFILE.chmod(0o600)
+        except OSError: pass
+    SESSION_SECRET = KEYFILE.read_text(encoding='utf-8').strip()
+SECRET = SESSION_SECRET
 serializer = URLSafeTimedSerializer(SECRET, salt='smartclub-api-v1')
 app = FastAPI(title='Клубиум API', version='1.0.0', docs_url='/api/docs', redoc_url=None)
 app.add_middleware(SessionMiddleware, secret_key=SECRET, same_site='lax', https_only=os.environ.get('SMARTCLUB_HTTPS', '0') == '1', max_age=8 * 3600)
@@ -94,7 +101,29 @@ def sign_in_redirect(request: Request) -> RedirectResponse:
 
 @app.exception_handler(StarletteHTTPException)
 async def html_auth_error_handler(request: Request, exc: StarletteHTTPException):
-    """Unauthenticated pages redirect to login; API stays HTTP 401 JSON."""
+    """Keep form errors human-readable; do not weaken CSRF/API authorization."""
+    path = request.url.path
+    content_type = request.headers.get('content-type', '').lower()
+    is_html_form = (
+        request.method == 'POST'
+        and not path.startswith(('/api/', '/chat/api/'))
+        and (content_type.startswith('application/x-www-form-urlencoded')
+             or content_type.startswith('multipart/form-data'))
+    )
+    if exc.status_code == 403 and str(exc.detail) == 'CSRF token invalid' and is_html_form:
+        # Reject the action, rotate the old token, then show a fresh GET form.
+        # Never re-submit a modifying POST or turn off CSRF verification.
+        if path == '/logout':
+            request.session.clear()
+            return RedirectResponse('/login?session_expired=1', status_code=303)
+        request.session.pop('csrf', None)
+        if path == '/password' and request.session.get('uid'):
+            return RedirectResponse('/password?session_expired=1', status_code=303)
+        if request.session.get('uid'):
+            request.session['notice'] = ('Сессия формы устарела. Откройте форму и повторите действие.', 'danger')
+            return RedirectResponse('/dashboard', status_code=303)
+        request.session.clear()
+        return RedirectResponse('/login?session_expired=1', status_code=303)
     if exc.status_code == 401 and is_browser_page(request):
         return sign_in_redirect(request)
     return await http_exception_handler(request, exc)
@@ -257,7 +286,8 @@ def csrf(request):
     return request.session['csrf']
 
 def check_csrf(request, token):
-    if not hmac.compare_digest(str(request.session.get('csrf','')),str(token or '')):
+    expected=request.session.get('csrf')
+    if not expected or not token or not hmac.compare_digest(str(expected),str(token)):
         raise HTTPException(403,'CSRF token invalid')
 
 def flash(request, message, level='success'):
@@ -368,12 +398,14 @@ def login_form(request:Request):
         user=get_user(request)
         if user['must_change_password']:return go('/password')
         return go(request.session.pop('after_login','/dashboard'))
-    return login_page(request)
+    message='Сессия устарела. Войдите заново.' if request.query_params.get('session_expired')=='1' else None
+    return login_page(request, error=message)
 
 @app.post('/login',response_class=HTMLResponse)
 def login_post(request:Request,username:str=Form(...),password:str=Form(...),csrf_token:str=Form('', alias='_csrf')):
     # Do not bypass CSRF protection. Reissue a clean session + visible HTML error.
-    if not hmac.compare_digest(str(request.session.get('csrf','')),str(csrf_token or '')):
+    expected=request.session.get('csrf')
+    if not expected or not csrf_token or not hmac.compare_digest(str(expected),str(csrf_token)):
         request.session.clear()
         return login_page(request,'Сессия входа устарела. Страница обновлена — попробуйте войти ещё раз.',403)
     client=request.client.host if request.client else 'local'
@@ -413,7 +445,8 @@ def logout(request:Request,csrf_token:str=Form('', alias='_csrf')):
 def password_form(request:Request):
     u=get_user(request)
     if not u:return go('/login')
-    return templates.TemplateResponse(request,'password.html',dict(request=request,csrf=csrf(request),user=u,error=None))
+    err='Сессия формы устарела. Повторите смену пароля.' if request.query_params.get('session_expired')=='1' else None
+    return templates.TemplateResponse(request,'password.html',dict(request=request,csrf=csrf(request),user=u,error=err))
 
 @app.post('/password',response_class=HTMLResponse)
 def password_post(request:Request,current:str=Form(...),new_password:str=Form(...),csrf_token:str=Form('', alias='_csrf')):
