@@ -37,11 +37,18 @@
         </div>
         {% if editing %}<p class="registration-footnote">Аккаунт: <strong>@{{profile.username}}</strong></p>{% else %}
         <div class="registration-fields registration-credentials">
-          <label>Логин — подбирается автоматически
-            <span class="registration-login-line"><input name="username" data-generated-login readonly autocomplete="off" placeholder="Укажите фамилию и имя"><button type="button" class="btn subtle" data-regenerate-login>↻ Новый логин</button></span>
-            <small>Фамилия + имя латиницей + случайные цифры. Сервер проверит уникальность перед сохранением.</small>
+          <div class="registration-login-settings">
+            <strong>Как задать логин?</strong>
+            <div class="registration-login-modes" role="radiogroup" aria-label="Способ задания логина">
+              <label><input type="radio" name="login_mode" value="auto" checked> ✨ Подобрать автоматически</label>
+              <label><input type="radio" name="login_mode" value="manual"> ✏️ Ввести самостоятельно</label>
+            </div>
+          </div>
+          <label>Логин <span class="field-required">*</span>
+            <span class="registration-login-line"><input name="username" data-generated-login readonly autocomplete="off" maxlength="50" placeholder="Укажите фамилию, имя и роль"><button type="button" class="btn subtle" data-regenerate-login hidden>↻ Другой вариант</button></span>
+            <small data-login-hint>Фамилия_Имя_Роль. Например, ivanov_aleksei_uchenik. Если логин занят, сервер добавит цифры.</small>
           </label>
-          <p class="registration-note registration-secret-note">🔐 Временный пароль будет создан безопасно на сервере и показан только один раз после регистрации. Пользователь сменит его при первом входе.</p>
+          <p class="registration-note registration-secret-note">🔐 Случайный временный пароль из <strong>6 символов</strong> создаётся на сервере и показывается только после регистрации. Код действует 24 часа. При первом входе пользователь обязан заменить его на пароль от 12 символов.</p>
         </div>{% endif %}
       </section>
       <section class="registration-panel registration-dynamic" data-role-panel="student" {% if role!='student' %}hidden{% endif %} aria-labelledby="studentHeading">

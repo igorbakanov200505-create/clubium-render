@@ -77,3 +77,27 @@
 .registration-credentials-card-label{font-size:13px;color:#9db4ca;font-weight:700}
 .registration-secret-field{display:none}
 @media(max-width:650px){.registration-login-line{flex-direction:column}.registration-login-line button{width:100%}}
+
+/* Manual/automatic login choice, responsive and keyboard accessible. */
+.registration-login-settings{display:flex;flex-direction:column;gap:9px;color:#dceff1;font-size:13px;margin-bottom:12px}
+.registration-login-modes{display:flex;gap:18px;flex-wrap:wrap}
+.registration-login-modes label{display:inline-flex;align-items:center;gap:7px;font-size:13px;font-weight:600;cursor:pointer;color:#e1eff8}
+.registration-login-modes input{accent-color:#61d6c4;width:17px;height:17px}
+.registration-login-line button[hidden]{display:none}
+
+/* Owner-only destructive administrative actions. */
+.system-reset{max-width:1120px}
+.system-reset-banner{margin:18px 0 24px;border-color:rgba(239,177,94,.5)}
+.system-reset-banner p{margin:9px 0 0;color:#e2c7a9;line-height:1.6}
+.system-reset-columns{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:20px}
+.system-reset-columns h2{font-size:19px;color:#f6f9ff;margin:0 0 12px}
+.system-reset-columns p{font-size:13px;line-height:1.7;color:#b7c7da}
+.system-reset-danger{border-color:rgba(229,85,92,.58)}
+.system-reset-form{display:flex;flex-direction:column;gap:17px;margin-top:25px}
+.system-reset-form label{display:flex;flex-direction:column;gap:8px;font-size:13px;color:#deebfa}
+.system-reset-form input{padding:13px;background:#0b1930;color:#edf6ff;border:1px solid #7583a1;border-radius:10px;min-width:0}
+.system-reset-form input:focus{outline:2px solid #62dccc}
+.system-reset-form code{color:#ffd1ae}
+.system-reset .btn.danger{background:#b63542;color:#fff;border:1px solid #e2717f}
+.system-reset .btn.danger:hover{background:#d1434e}
+@media(max-width:800px){.system-reset-columns{grid-template-columns:1fr}}

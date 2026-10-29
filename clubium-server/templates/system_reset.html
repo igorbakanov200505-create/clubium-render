@@ -1,0 +1,38 @@
+{% extends 'base.html' %}
+{% block content %}
+<div class="registration system-reset" data-system-reset>
+  <div class="registration-heading">
+    <div class="registration-tag">ТОЛЬКО ГЛАВНЫЙ ТЕХНИЧЕСКИЙ АДМИНИСТРАТОР</div>
+    <h1>⚠ Сброс ÜiirmeHub</h1>
+    <p>Необратимые операции. Аккаунт технического администратора и его пароль сохраняются. После полного сброса удаляются школьные данные, вложения и обычные аккаунты.</p>
+  </div>
+  <div class="registration-panel system-reset-banner" role="alert">
+    <strong>Внимание: GitHub хранит историю зашифрованных копий.</strong>
+    <p>После сброса текущая резервная копия будет перезаписана пустым состоянием. Старые версии могут остаться в истории приватного репозитория — для их окончательного удаления требуется отдельное удаление истории/репозитория на GitHub. Сначала сохраните нужные данные.</p>
+    <p><strong>Статус GitHub-копий:</strong> {{'включены' if backup_enabled else 'отключены — восстановление не гарантируется'}}.</p>
+    <p>Обычные аккаунты: <strong>{{(counts.get('users',0)-1) if counts.get('users',0)>0 else 0}}</strong>. Кружки: <strong>{{counts.get('clubs',0)}}</strong>. Ученики: <strong>{{counts.get('students',0)}}</strong>.</p>
+  </div>
+  <div class="system-reset-columns">
+    <section class="registration-panel">
+      <h2>1. Удалить обычные аккаунты</h2>
+      <p>Удаляются все администраторы (кроме технического), учителя, родители и ученики как учётные записи. Школьные кружки, карточки учеников, отчёты и посещаемость сохраняются; связи с удалёнными аккаунтами очищаются.</p>
+      <form action="/system/reset" method="post" class="system-reset-form" autocomplete="off">
+        <input type="hidden" name="_csrf" value="{{csrf}}"><input type="hidden" name="mode" value="accounts">
+        <label>Напечатайте <code>УДАЛИТЬ АККАУНТЫ</code><input name="confirm" required autocomplete="off" placeholder="УДАЛИТЬ АККАУНТЫ"></label>
+        <label>Текущий пароль главного администратора<input type="password" name="current_password" required autocomplete="current-password"></label>
+        <button type="submit" class="btn subtle full">Удалить обычные аккаунты</button>
+      </form>
+    </section>
+    <section class="registration-panel system-reset-danger">
+      <h2>2. Полностью очистить данные сайта</h2>
+      <p>Удаляются все обычные аккаунты, кружки, ученики, посещаемость, чаты, задания, отчёты и загруженные файлы. Останутся только структура базы и технический аккаунт.</p>
+      <form action="/system/reset" method="post" class="system-reset-form" autocomplete="off">
+        <input type="hidden" name="_csrf" value="{{csrf}}"><input type="hidden" name="mode" value="full">
+        <label>Напечатайте <code>СТЕРЕТЬ ВСЁ</code><input name="confirm" required autocomplete="off" placeholder="СТЕРЕТЬ ВСЁ"></label>
+        <label>Текущий пароль главного администратора<input type="password" name="current_password" required autocomplete="current-password"></label>
+        <button type="submit" class="btn danger full" data-confirm-full-reset>Полностью очистить базу и файлы</button>
+      </form>
+    </section>
+  </div>
+</div>
+{% endblock %}

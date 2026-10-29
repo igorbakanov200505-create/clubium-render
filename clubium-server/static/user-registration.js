@@ -1,6 +1,10 @@
 /* Only activates on admin account registration/edit forms. */
 (function(){
   'use strict';
+  const resetButton=document.querySelector('[data-confirm-full-reset]');
+  resetButton?.closest('form')?.addEventListener('submit',event=>{
+    if(!window.confirm('Вы точно хотите удалить ВСЕ данные ÜiirmeHub? Это действие необратимо.'))event.preventDefault();
+  });
   const root=document.querySelector('[data-user-registration]');
   if(!root){
     const created=document.querySelector('[data-created-account]');
@@ -24,23 +28,33 @@
   const loginPreview=form.querySelector('[data-generated-login]');
   const lastName=form.querySelector('input[name="last_name"]');
   const firstName=form.querySelector('input[name="first_name"]');
-  const loginButton=form.querySelector('[data-regenerate-login]');
+  const loginModes=[...form.querySelectorAll('input[name="login_mode"]')];
+  const loginHint=form.querySelector('[data-login-hint]');
   const cyrillic={а:'a',б:'b',в:'v',г:'g',д:'d',е:'e',ё:'yo',ж:'zh',з:'z',и:'i',й:'i',к:'k',л:'l',м:'m',н:'n',о:'o',п:'p',р:'r',с:'s',т:'t',у:'u',ф:'f',х:'kh',ц:'ts',ч:'ch',ш:'sh',щ:'shch',ъ:'',ы:'y',ь:'',э:'e',ю:'yu',я:'ya',ә:'a',ғ:'gh',қ:'q',ң:'ng',ө:'o',ұ:'u',ү:'u',һ:'h',і:'i'};
   const loginPart=(value,limit)=>[...String(value||'').trim().toLowerCase()].map(ch=>Object.prototype.hasOwnProperty.call(cyrillic,ch)?cyrillic[ch]:ch).join('').normalize('NFKD').replace(/[^a-z0-9]/g,'').slice(0,limit)||'user';
-  function numberSuffix(){
-    if(window.crypto?.getRandomValues){const data=new Uint32Array(1);window.crypto.getRandomValues(data);return String(data[0]%10000).padStart(4,'0')}
-    // The server securely generates the final login even without browser crypto.
-    return '';
-  }
+  const roleSuffixes={student:'uchenik',teacher:'uchitel',parent:'roditel',admin:'admin'};
+  function chosenMode(){return loginModes.find(r=>r.checked)?.value||'auto'}
   function refreshLogin(){
-    if(!loginPreview)return;
+    if(!loginPreview||chosenMode()==='manual')return;
     const family=lastName?.value.trim()||'';
     const given=firstName?.value.trim()||'';
-    loginPreview.value=family&&given?loginPart(family,20)+'.'+loginPart(given,18)+'.'+numberSuffix():'';
+    const role=fixed?.value||radios.find(r=>r.checked)?.value||'student';
+    loginPreview.value=family&&given?loginPart(family,19)+'_'+loginPart(given,17)+'_'+roleSuffixes[role]:'';
+  }
+  function switchLoginMode(){
+    if(!loginPreview)return;
+    const manual=chosenMode()==='manual';
+    loginPreview.readOnly=!manual;
+    loginPreview.pattern=manual?'[A-Za-z0-9._-]{3,50}':'';
+    loginPreview.placeholder=manual?'Пример: ivanov_ivan':'Укажите фамилию и имя';
+    if(loginHint)loginHint.textContent=manual?'Введите логин латиницей (3–50 символов): буквы, цифры, . _ -':'Фамилия_Имя_Роль. При совпадении сервер добавит цифры.';
+    loginPreview.value='';
+    if(!manual)refreshLogin();
   }
   [lastName,firstName].forEach(el=>el?.addEventListener('input',refreshLogin));
-  loginButton?.addEventListener('click',refreshLogin);
-  refreshLogin();
+  radios.forEach(el=>el.addEventListener('change',refreshLogin));
+  loginModes.forEach(el=>el.addEventListener('change',switchLoginMode));
+  switchLoginMode();
   const roleLabels={student:'Ученик · класс, группа и несколько кружков.',parent:'Родитель · привязка нескольких детей.',teacher:'Учитель · несколько кружков.',admin:'Администратор · без дополнительных полей.'};
   function currentRole(){return fixed?.value||radios.find(r=>r.checked)?.value||'student'}
   function updateCounts(){

@@ -246,6 +246,11 @@ CREATE TABLE IF NOT EXISTS lesson_notes (
  PRIMARY KEY(club_id,lesson_date)
 );
 CREATE INDEX IF NOT EXISTS lesson_notes_by_date ON lesson_notes(lesson_date,club_id);
+-- Preserve only technical metadata on full reset; rotate login epoch.
+CREATE TABLE IF NOT EXISTS system_settings (
+ key TEXT PRIMARY KEY,
+ value TEXT NOT NULL
+);
 
 '''
 
@@ -277,12 +282,16 @@ with conn() as db:
     db.execute('CREATE UNIQUE INDEX IF NOT EXISTS one_service_admin ON users(is_service_admin) WHERE is_service_admin = 1')
     # Add new optional fields without removing old account, class or enrollment data.
     user_columns={c['name'] for c in db.execute('PRAGMA table_info(users)')}
+    if 'temporary_password_expires' not in user_columns:
+        db.execute('ALTER TABLE users ADD COLUMN temporary_password_expires TEXT')
     for column in ('last_name', 'first_name', 'patronymic'):
         if column not in user_columns:
             db.execute(f"ALTER TABLE users ADD COLUMN {column} TEXT NOT NULL DEFAULT ''")
     student_columns={c['name'] for c in db.execute('PRAGMA table_info(students)')}
     if 'school_group' not in student_columns:
         db.execute("ALTER TABLE students ADD COLUMN school_group TEXT NOT NULL DEFAULT ''")
+    db.execute('INSERT OR IGNORE INTO system_settings(key,value) VALUES(?,?)',
+               ('session_epoch', secrets.token_urlsafe(32)))
 
 def rows(sql, params=()):
     with conn() as db:
@@ -314,9 +323,17 @@ def password_ok(password, encoded):
         return hmac.compare_digest(candidate,bytes.fromhex(hashval))
     except (ValueError,TypeError): return False
 
+def session_epoch():
+    setting=one("SELECT value FROM system_settings WHERE key='session_epoch'")
+    return setting['value'] if setting else ''
+
+
 def get_user(request):
     uid=request.session.get('uid')
     if not uid: return None
+    if request.session.get('epoch') != session_epoch():
+        request.session.clear()
+        return None
     user=one('SELECT id,username,display_name,role,active,must_change_password,is_service_admin FROM users WHERE id=?',(uid,))
     return user if user and user['active'] else None
 
@@ -456,9 +473,13 @@ def login_post(request:Request,username:str=Form(...),password:str=Form(...),csr
     if not u or not u['active'] or not password_ok(password,u['password_hash']):
         attempts[key].append(time.monotonic())
         return login_page(request,'Неверный логин или пароль',401)
+    if u['must_change_password'] and u.get('temporary_password_expires') and \
+            one("SELECT 1 AS expired WHERE datetime(?)<=datetime('now')",
+                (u['temporary_password_expires'],)):
+        return login_page(request,'Временный пароль истёк (24 часа). Обратитесь к администратору для выдачи нового.',403)
     attempts.pop(key,None)
     after_login=request.session.get('after_login','/dashboard')
-    request.session.clear();request.session['uid']=u['id'];csrf(request)
+    request.session.clear();request.session['uid']=u['id'];request.session['epoch']=session_epoch();csrf(request)
     request.session['after_login']=after_login
     request.session['show_welcome']=True
     log(u,'login')
@@ -499,7 +520,7 @@ def password_post(request:Request,current:str=Form(...),new_password:str=Form(..
     elif len(new_password)<12:err='Новый пароль должен содержать минимум 12 символов'
     elif new_password==current:err='Укажите новый пароль, отличный от старого'
     if err:return templates.TemplateResponse(request,'password.html',dict(request=request,csrf=csrf(request),user=u,error=err),status_code=400)
-    run('UPDATE users SET password_hash=?,must_change_password=0 WHERE id=?',(password_hash(new_password),u['id']))
+    run('UPDATE users SET password_hash=?,must_change_password=0,temporary_password_expires=NULL WHERE id=?',(password_hash(new_password),u['id']))
     log(u,'password_change');flash(request,'Пароль изменён');return go('/welcome')
 
 @app.get('/dashboard')
@@ -1033,28 +1054,68 @@ def _login_piece(name, max_length):
     return word[:max_length] or 'user'
 
 
-def _login_prefix(last_name, first_name):
-    return _login_piece(last_name,20)+'.'+_login_piece(first_name,18)+'.'
+_LOGIN_ROLE_NAMES={'student':'uchenik','teacher':'uchitel','admin':'admin','parent':'roditel'}
+_LOGIN_PATTERN=re.compile(r'[a-z0-9][a-z0-9._-]{2,49}\Z')
+
+
+def _login_prefix(last_name, first_name, role='student'):
+    """FIO_rol' (ASCII); already at most 50 characters."""
+    if role not in _LOGIN_ROLE_NAMES:
+        raise HTTPException(400, 'Недопустимая роль для логина')
+    return _login_piece(last_name,19)+'_'+_login_piece(first_name,17)+'_'+_LOGIN_ROLE_NAMES[role]
 
 
 def _temporary_password():
-    # 20 randomly chosen characters: ~118 bits, no confusing 0/O/1/I.
-    chars='ABCDEFGHJKLMNPQRSTUVWXYZabcdefghjkmnpqrstuvwxyz23456789'
-    return ''.join(secrets.choice(chars) for _ in range(20))
+    """Six character, CSPRNG-derived, *temporary only*, always force change.
+
+    Six-character codes are weaker than full passwords. Do not use as ongoing
+    credentials. The first login requires a new password of >=12 characters.
+    """
+    upper='ABCDEFGHJKLMNPQRSTUVWXYZ'
+    lower='abcdefghjkmnpqrstuvwxyz'
+    digits='23456789'
+    alphabet=upper+lower+digits
+    chars=[secrets.choice(upper),secrets.choice(lower),secrets.choice(digits)]
+    chars.extend(secrets.choice(alphabet) for _ in range(3))
+    secrets.SystemRandom().shuffle(chars)
+    return ''.join(chars)
 
 
-def _generated_login(prefix, suggested='', attempt=0):
-    # Respect the preview only when it matches the server-side transliteration.
-    if attempt==0 and re.fullmatch(re.escape(prefix)+r'[0-9]{4,8}',suggested or ''):
-        return suggested
-    n=4 if attempt<9 else 8
-    return prefix+str(secrets.randbelow(10**n)).zfill(n)
+def _generated_login(prefix, attempt=0):
+    if attempt==0:return prefix
+    # Case insensitive SQLite uniqueness determines the final name.
+    suffix='_'+str(attempt+1)
+    return prefix[:50-len(suffix)]+suffix
 
 
-def save_user_profile(request, target, username, new_password, role, last_name, first_name, patronymic, school_class, school_group, club_ids_form, child_ids, existing_student_id, parent_user_id):
+def _manual_login(value):
+    login=clean(value,50).strip().lower()
+    if not _LOGIN_PATTERN.fullmatch(login) or login=='azraellone':
+        raise HTTPException(400, 'Логин: 3–50 латинских букв, цифр, точек, дефисов или подчёркиваний; AzraelLone зарезервирован')
+    return login
+
+
+def one_time_credentials(request, admin, fullname, role, username, generated_password,
+                         page_title='Данные нового пользователя'):
+    """Expose temporary credential in one HTML response only. Never use cookies."""
+    response=templates.TemplateResponse(request,'user_credentials.html',dict(
+        request=request,user=admin,csrf=csrf(request),notice=None,current='users',
+        page_title=page_title,account_name=fullname,account_role=role,
+        account_username=username,temporary_password=generated_password))
+    response.headers['Cache-Control']='no-store, no-cache, private, max-age=0'
+    response.headers['Pragma']='no-cache'
+    response.headers['Referrer-Policy']='no-referrer'
+    response.headers['X-Robots-Tag']='noindex, noarchive'
+    return response
+
+
+def save_user_profile(request, target, username, new_password, role, last_name, first_name, patronymic, school_class, school_group, club_ids_form, child_ids, existing_student_id, parent_user_id, login_mode='auto'):
     admin=require(request,('admin',))
-    # New accounts always get server-generated credentials. No predictable name-based passwords.
-    username=clean(username,50).lower().strip() if target is None else ''
+    # Only the FIRST login uses a six-character code; a stronger 12+ char
+    # password is mandatory to complete sign-in.
+    if target is None and login_mode not in ('auto','manual'):
+        raise HTTPException(400,'Выберите автоматический или ручной логин')
+    username=_manual_login(username) if target is None and login_mode=='manual' else ''
     generated_password=_temporary_password() if target is None else None
     last_name,first_name,patronymic,school_class,school_group,clubs,children=validate_registration(
         role,last_name,first_name,patronymic,school_class,school_group,club_ids_form,child_ids,existing_student_id,parent_user_id)
@@ -1062,13 +1123,14 @@ def save_user_profile(request, target, username, new_password, role, last_name, 
     try:
         with conn() as db:
             if target is None:
-                prefix=_login_prefix(last_name,first_name)
+                prefix=_login_prefix(last_name,first_name,role)
                 hashed_password=password_hash(generated_password)
-                # Database uniqueness is authoritative, including simultaneous admin requests.
-                for attempt in range(20):
-                    candidate=_generated_login(prefix,username,attempt)
+                # Manual selection is never silently changed. Auto mode resolves
+                # collisions server-side and SQLite enforces true uniqueness.
+                for attempt in range(100):
+                    candidate=username if login_mode=='manual' else _generated_login(prefix,attempt)
                     try:
-                        cursor=db.execute('INSERT INTO users(username,display_name,password_hash,role,last_name,first_name,patronymic) VALUES(?,?,?,?,?,?,?)',
+                        cursor=db.execute("INSERT INTO users(username,display_name,password_hash,role,last_name,first_name,patronymic,temporary_password_expires) VALUES(?,?,?,?,?,?,?,datetime('now','+24 hours'))",
                                (candidate,fullname,hashed_password,role,last_name,first_name,patronymic))
                         username=candidate
                         uid=cursor.lastrowid
@@ -1076,8 +1138,10 @@ def save_user_profile(request, target, username, new_password, role, last_name, 
                     except sqlite3.IntegrityError as exc:
                         if 'users.username' not in str(exc):
                             raise
+                        if login_mode=='manual':
+                            raise HTTPException(409,'Этот логин уже занят. Введите другой.') from exc
                 else:
-                    raise HTTPException(409,'Не удалось подобрать свободный логин. Попробуйте ещё раз.')
+                    raise HTTPException(409,'Не удалось подобрать свободный логин. Попробуйте другой вариант.')
             else:
                 profile=db.execute('SELECT id,role FROM users WHERE id=? AND is_service_admin=0',(target,)).fetchone()
                 if not profile:raise HTTPException(404,'Аккаунт не найден')
@@ -1138,27 +1202,17 @@ def save_user_profile(request, target, username, new_password, role, last_name, 
         if 'users.username' in str(exc):raise HTTPException(400,'Такой логин уже существует') from exc
         raise HTTPException(400,'Конфликт данных. Проверьте выбранные записи.') from exc
     if target is None:
-        # One-time HTML response. Never store or print the plaintext credential in
-        # session cookies, the database, GitHub backups, URLs or audit logs.
-        response=templates.TemplateResponse(request,'user_credentials.html',dict(
-            request=request,user=admin,csrf=csrf(request),notice=None,current='users',
-            page_title='Данные нового пользователя',account_name=fullname,
-            account_role=role,account_username=username,temporary_password=generated_password))
-        response.headers['Cache-Control']='no-store, no-cache, private, max-age=0'
-        response.headers['Pragma']='no-cache'
-        response.headers['Referrer-Policy']='no-referrer'
-        response.headers['X-Robots-Tag']='noindex, noarchive'
-        return response
+        return one_time_credentials(request,admin,fullname,role,username,generated_password)
     flash(request,'Данные пользователя обновлены')
     return go('/users')
 
 
 @app.post('/users/create')
-def users_create(request:Request,csrf_token:str=Form('', alias='_csrf'),username:str=Form(''),new_password:str=Form(''),role:str=Form('teacher'),
+def users_create(request:Request,csrf_token:str=Form('', alias='_csrf'),username:str=Form(''),login_mode:str=Form('auto'),new_password:str=Form(''),role:str=Form('teacher'),
                  last_name:str=Form(''),first_name:str=Form(''),patronymic:str=Form(''),school_class:str=Form(''),school_group:str=Form(''),
                  club_ids_form:list[int]=Form(default=[]),child_ids:list[int]=Form(default=[]),existing_student_id:int=Form(0),parent_user_id:int=Form(0)):
     check_csrf(request,csrf_token)
-    return save_user_profile(request,None,username,new_password,role,last_name,first_name,patronymic,school_class,school_group,club_ids_form,child_ids,existing_student_id,parent_user_id)
+    return save_user_profile(request,None,username,new_password,role,last_name,first_name,patronymic,school_class,school_group,club_ids_form,child_ids,existing_student_id,parent_user_id,login_mode)
 
 
 @app.post('/users/{target}/profile')
@@ -1169,12 +1223,15 @@ def users_profile_update(request:Request,target:int,csrf_token:str=Form('', alia
     return save_user_profile(request,target,'','',role,last_name,first_name,patronymic,school_class,school_group,club_ids_form,child_ids,existing_student_id,parent_user_id)
 
 @app.post('/users/{target}/reset')
-def user_reset(request:Request,target:int,csrf_token:str=Form('', alias='_csrf'),new_password:str=Form('')):
-    u=require(request,('admin',));check_csrf(request,csrf_token)
-    if not one('SELECT 1 FROM users WHERE id=? AND is_service_admin=0',(target,)):raise HTTPException(404)
-    if len(new_password)<12:raise HTTPException(400,'Пароль: минимум 12 символов')
-    run('UPDATE users SET password_hash=?,must_change_password=1 WHERE id=?',(password_hash(new_password),target))
-    log(u,'user_password_reset',target);flash(request,'Пароль сброшен. При следующем входе нужно выбрать новый.');return go('/users')
+def user_reset(request:Request,target:int,csrf_token:str=Form('', alias='_csrf')):
+    admin=require(request,('admin',));check_csrf(request,csrf_token)
+    account=one('SELECT username,display_name,role FROM users WHERE id=? AND is_service_admin=0',(target,))
+    if not account:raise HTTPException(404,'Аккаунт не найден')
+    code=_temporary_password()
+    run("UPDATE users SET password_hash=?,must_change_password=1,temporary_password_expires=datetime('now','+24 hours') WHERE id=?",(password_hash(code),target))
+    log(admin,'user_password_reset',str(target))
+    return one_time_credentials(request,admin,account['display_name'],account['role'],account['username'],code,
+                                page_title='Новый временный пароль')
 
 @app.post('/users/{target}/toggle')
 def user_toggle(request:Request,target:int,csrf_token:str=Form('', alias='_csrf')):
@@ -1184,6 +1241,118 @@ def user_toggle(request:Request,target:int,csrf_token:str=Form('', alias='_csrf'
     if target==u['id']:raise HTTPException(403,'Нельзя отключить свой аккаунт')
     run('UPDATE users SET active=? WHERE id=?',(0 if target_user['active'] else 1,target));log(u,'user_toggle',target)
     flash(request,'Статус пользователя изменён');return go('/users')
+
+def service_owner_only(request):
+    user=require(request,('admin',))
+    if user['is_service_admin']!=1:
+        raise HTTPException(403,'Этот раздел доступен только техническому главному администратору')
+    return user
+
+
+@app.get('/system/reset')
+def system_reset_page(request:Request):
+    admin=service_owner_only(request)
+    tables=rows("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name")
+    summary={}
+    with conn() as db:
+        for item in tables:
+            table=item['name']
+            if table in ('system_settings','owner_password_resets'):continue
+            if not re.fullmatch(r'[A-Za-z_][A-Za-z0-9_]*',table):continue
+            summary[table]=db.execute('SELECT COUNT(*) FROM "'+table+'"').fetchone()[0]
+    return templates.TemplateResponse(request,'system_reset.html',dict(
+        request=request,user=admin,csrf=csrf(request),notice=request.session.pop('notice',None),
+        current='system',page_title='Сброс системы',counts=summary,
+        backup_enabled=_github_backup.enabled))
+
+
+def reset_local_data(mode, owner_id):
+    """Run one SQLite transaction; service login and schema survive both modes.
+
+    Full reset must invalidate every pre-existing browser and API session so
+    deleted account IDs cannot be reused by stale signed cookies.
+    """
+    with conn() as db:
+        db.execute('PRAGMA secure_delete=ON')
+        if mode=='accounts':
+            # Foreign keys unlink old teacher, parent and student associations;
+            # linked school cards, attendance and club data remain.
+            db.execute('DELETE FROM users WHERE is_service_admin=0')
+            db.execute('DELETE FROM chat_messages WHERE sender_id=? OR recipient_id=?',(owner_id,owner_id))
+            db.execute('DELETE FROM chat_contacts WHERE owner_id=? OR peer_id=?',(owner_id,owner_id))
+            db.execute('DELETE FROM audit_log WHERE user_id IS NULL')
+            db.execute('INSERT INTO audit_log(user_id,action,details) VALUES(?,?,?)',
+                       (owner_id,'system_delete_regular_accounts','All non-service accounts removed'))
+        elif mode=='full':
+            # Never remove service admin or password-reset markers: those are
+            # required to retain the technical access and avoid env reset replay.
+            db.execute('PRAGMA defer_foreign_keys=ON')
+            tables=[entry[0] for entry in db.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'")]
+            safe=[t for t in tables if t not in ('users','system_settings','owner_password_resets')]
+            for table in safe:
+                if not re.fullmatch(r'[A-Za-z_][A-Za-z0-9_]*',table):
+                    raise RuntimeError('Unexpected table name: refusing destructive action')
+                db.execute('DELETE FROM "'+table+'"')
+            db.execute('DELETE FROM users WHERE is_service_admin=0')
+            db.execute('UPDATE system_settings SET value=? WHERE key=?',
+                       (secrets.token_urlsafe(32),'session_epoch'))
+            db.execute('INSERT INTO audit_log(user_id,action,details) VALUES(?,?,?)',
+                       (owner_id,'system_full_reset','School data cleared; technical owner preserved'))
+        else:
+            raise ValueError('Invalid system reset operation')
+
+
+@app.post('/system/reset')
+def system_reset_execute(request:Request,csrf_token:str=Form('',alias='_csrf'),
+                         mode:str=Form(''),confirm:str=Form(''),current_password:str=Form('')):
+    admin=service_owner_only(request)
+    check_csrf(request,csrf_token)
+    phrases={'accounts':'УДАЛИТЬ АККАУНТЫ','full':'СТЕРЕТЬ ВСЁ'}
+    if mode not in phrases or confirm.strip()!=phrases[mode]:
+        raise HTTPException(400,'Неверная фраза подтверждения; данные не изменены')
+    key=('system-reset',admin['id'],request.client.host if request.client else 'local')
+    attempts[key]=[t for t in attempts[key] if time.monotonic()-t<900]
+    if len(attempts[key])>=5:
+        raise HTTPException(429,'Слишком много попыток подтверждения. Повторите позже.')
+    row=one('SELECT password_hash FROM users WHERE id=? AND is_service_admin=1 AND active=1',(admin['id'],))
+    if not row or not password_ok(current_password,row['password_hash']):
+        attempts[key].append(time.monotonic())
+        raise HTTPException(403,'Пароль главного администратора неверен')
+    attempts.pop(key,None)
+    # Serialize the reset, private-repo preflight and immediate remote snapshot.
+    # Otherwise a background backup worker could race this destructive change.
+    with _github_backup._lock:
+        if _github_backup.enabled:
+            _github_backup._ensure_private_repo()
+            _remote_content, sha = _github_backup._fetch_file()
+            if not sha:
+                raise HTTPException(503,'Резервная копия GitHub не найдена. Сброс остановлен до сохранения данных.')
+            _github_backup._remote_sha=sha
+        reset_local_data(mode,admin['id'])
+        # Repack SQLite to keep deleted records out of a new encrypted backup.
+        # Cannot be executed inside the deletion transaction.
+        with sqlite3.connect(DB,timeout=20) as compact:
+            compact.execute('PRAGMA busy_timeout=10000')
+            compact.execute('VACUUM')
+        if mode=='full':
+            uploads=INSTANCE/'uploads'
+            if uploads.exists():
+                for f in uploads.iterdir():
+                    if f.is_file() or f.is_symlink(): f.unlink()
+        # Restore must NOT reintroduce the old database after Render discards
+        # ephemeral SQLite. Force immediate encrypted snapshot on same lock.
+        if _github_backup.enabled:
+            try:
+                _github_backup.flush(force=True)
+            except Exception:
+                raise HTTPException(503,'Локальные данные очищены, но GitHub-копия ещё не обновлена. НЕ перезапускайте Render; проверьте логи.')
+    if mode=='full':
+        request.session.clear()
+        return go('/login')
+    flash(request,'Обычные аккаунты удалены. Технический главный администратор сохранён.')
+    return go('/system/reset')
+
 
 @app.middleware('http')
 async def security_headers(request:Request,call_next):
@@ -1204,7 +1373,7 @@ def apiuser(request:Request):
         try:
             data=serializer.loads(authorization[7:],max_age=12*3600)
             u=one('SELECT id,username,display_name,role,active,must_change_password,password_hash FROM users WHERE id=?',(data['uid'],))
-            if not u or not u['active'] or u['must_change_password'] or data.get('ver')!=hashlib.sha256(u['password_hash'].encode()).hexdigest()[:16]:raise ValueError()
+            if not u or not u['active'] or u['must_change_password'] or data.get('epoch') != session_epoch() or data.get('ver')!=hashlib.sha256(u['password_hash'].encode()).hexdigest()[:16]:raise ValueError()
             return u
         except (ValueError,BadSignature,SignatureExpired,KeyError):raise HTTPException(401,'Недействительный токен')
     raise HTTPException(401,'Требуется Bearer token')
@@ -1219,7 +1388,7 @@ def api_token(request:Request,username:str=Form(...),password:str=Form(...)):
         attempts[key].append(time.monotonic());raise HTTPException(401,'Неверный логин или пароль')
     if u['must_change_password']:raise HTTPException(403,'Сначала смените пароль на сайте')
     attempts.pop(key,None)
-    tok=serializer.dumps({'uid':u['id'],'ver':hashlib.sha256(u['password_hash'].encode()).hexdigest()[:16]})
+    tok=serializer.dumps({'uid':u['id'],'epoch':session_epoch(),'ver':hashlib.sha256(u['password_hash'].encode()).hexdigest()[:16]})
     return {'access_token':tok,'token_type':'bearer','expires_in':43200,'role':u['role']}
 
 @app.get('/api/v1/me')
