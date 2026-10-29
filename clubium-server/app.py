@@ -274,14 +274,23 @@ def health():return {'status':'ok','service':'Клубиум'}
 def index(request:Request):return go('/dashboard' if get_user(request) else '/login')
 
 attempts=defaultdict(list)
+def login_page(request:Request, error=None, status_code=200):
+    """Always deliver an HTML login form, including after an expired CSRF session."""
+    response=templates.TemplateResponse(request,'login.html',dict(request=request,csrf=csrf(request),error=error),status_code=status_code)
+    response.headers['Cache-Control']='no-store, private'
+    return response
+
 @app.get('/login',response_class=HTMLResponse)
 def login_form(request:Request):
     if get_user(request):return go('/dashboard')
-    return templates.TemplateResponse(request,'login.html',dict(request=request,csrf=csrf(request),error=None))
+    return login_page(request)
 
 @app.post('/login',response_class=HTMLResponse)
 def login_post(request:Request,username:str=Form(...),password:str=Form(...),csrf_token:str=Form('', alias='_csrf')):
-    check_csrf(request,csrf_token)
+    # Do not bypass CSRF protection. Reissue a clean session + visible HTML error.
+    if not hmac.compare_digest(str(request.session.get('csrf','')),str(csrf_token or '')):
+        request.session.clear()
+        return login_page(request,'Сессия входа устарела. Страница обновлена — попробуйте войти ещё раз.',403)
     client=request.client.host if request.client else 'local'
     key=(client,clean(username,70).lower())
     attempts[key]=[t for t in attempts[key] if time.monotonic()-t<600]
@@ -289,7 +298,7 @@ def login_post(request:Request,username:str=Form(...),password:str=Form(...),csr
     u=one('SELECT * FROM users WHERE username=? COLLATE NOCASE',(clean(username,70),))
     if not u or not u['active'] or not password_ok(password,u['password_hash']):
         attempts[key].append(time.monotonic())
-        return templates.TemplateResponse(request,'login.html',dict(request=request,csrf=csrf(request),error='Неверный логин или пароль'),status_code=401)
+        return login_page(request,'Неверный логин или пароль',401)
     attempts.pop(key,None)
     request.session.clear();request.session['uid']=u['id'];csrf(request)
     request.session['show_welcome']=True
