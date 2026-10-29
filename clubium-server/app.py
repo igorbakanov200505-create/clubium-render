@@ -225,6 +225,27 @@ CREATE TABLE IF NOT EXISTS chat_reports (
  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
  UNIQUE(message_id,reporter_id)
 );
+-- Only explicitly selected conversations are shown in the private chat list.
+CREATE TABLE IF NOT EXISTS chat_contacts (
+ owner_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+ peer_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+ created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+ PRIMARY KEY(owner_id,peer_id),CHECK(owner_id<>peer_id)
+);
+-- Teacher notes for dated lessons: every club/day has its own assignment.
+CREATE TABLE IF NOT EXISTS lesson_notes (
+ club_id INTEGER NOT NULL REFERENCES clubs(id) ON DELETE CASCADE,
+ lesson_date TEXT NOT NULL,
+ lesson_time TEXT NOT NULL DEFAULT '',
+ topic TEXT NOT NULL DEFAULT '',
+ assignment TEXT NOT NULL DEFAULT '',
+ materials TEXT NOT NULL DEFAULT '',
+ teacher_note TEXT NOT NULL DEFAULT '',
+ updated_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+ updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+ PRIMARY KEY(club_id,lesson_date)
+);
+CREATE INDEX IF NOT EXISTS lesson_notes_by_date ON lesson_notes(lesson_date,club_id);
 
 '''
 
@@ -489,8 +510,8 @@ def dashboard(request:Request):
     personids=[x['id'] for x in students] if u['role'] in ('parent','student') else None
     stats=attendance_stats(ids,student_ids=personids)
     achie=[a for a in get_achievements(u)]
-    recent=rows('SELECT a.lesson_date,a.status,a.student_id,s.fullname,c.title as club FROM attendance a JOIN students s ON s.id=a.student_id JOIN clubs c ON c.id=a.club_id ORDER BY a.updated_at DESC LIMIT 30')
-    recent=[x for x in recent if x['club'] in {c['title'] for c in clubs} and (personids is None or x.get('student_id') in personids)][:7]
+    recent=rows('SELECT a.lesson_date,a.status,a.student_id,a.club_id,s.fullname,c.title as club FROM attendance a JOIN students s ON s.id=a.student_id JOIN clubs c ON c.id=a.club_id ORDER BY a.updated_at DESC LIMIT 100')
+    recent=[x for x in recent if x['club_id'] in ids and (personids is None or x['student_id'] in personids)][:7]
     return render(request,'dashboard',page_title='Обзор системы',clubs=clubs,students=students,stats=stats,achievements=achie,recent=recent,teacher_count=one("SELECT COUNT(*) AS n FROM users WHERE role='teacher'")['n'] if u['role']=='admin' else 0)
 
 @app.get('/clubs')
@@ -569,9 +590,84 @@ def student_delete(request:Request,sid:int,csrf_token:str=Form('', alias='_csrf'
         run('DELETE FROM students WHERE id=?',(sid,));flash(request,'Ученик удалён')
     log(u,'student_delete_or_unenroll',sid);return go('/students')
 
+def lesson_notes_visible(user, start=None, end=None):
+    # Server-scoped dated lessons. Do not return data of unrelated families.
+    ids=club_ids(user)
+    if not ids:return []
+    where=f"WHERE n.club_id IN ({','.join('?' * len(ids))})"
+    params=list(ids)
+    if start:
+        valid_date(start)
+        where+=' AND n.lesson_date>=?'
+        params.append(start)
+    if end:
+        valid_date(end)
+        where+=' AND n.lesson_date<=?'
+        params.append(end)
+    notes=rows(f'''SELECT n.club_id,n.lesson_date,n.lesson_time,n.topic,n.assignment,
+      n.materials,n.teacher_note,n.updated_at,c.title AS club_title,c.room,
+      c.time AS regular_time,c.weekdays,c.teacher_id,u.display_name AS teacher_name
+      FROM lesson_notes n JOIN clubs c ON c.id=n.club_id
+      LEFT JOIN users u ON u.id=c.teacher_id
+      {where} ORDER BY n.lesson_date ASC,COALESCE(NULLIF(n.lesson_time,''),c.time),c.title''',params)
+    if user['role'] in ('parent','student'):
+        linked=visible_students(user)
+        member_ids=[s['id'] for s in linked]
+        if not member_ids:return []
+        mapping=rows(f'''SELECT e.club_id,s.id AS student_id,s.fullname AS student_name
+            FROM enrollments e JOIN students s ON s.id=e.student_id
+            WHERE s.id IN ({','.join('?'*len(member_ids))})''',member_ids)
+        belongs=defaultdict(list)
+        for entry in mapping:belongs[entry['club_id']].append(entry['student_name'])
+        for item in notes:item['children']=', '.join(belongs[item['club_id']])
+    return notes
+
 @app.get('/schedule')
 def schedule(request:Request):
-    u=require(request);return render(request,'schedule',page_title='Расписание занятий',clubs=filtered_clubs(u))
+    u=require(request)
+    notes=lesson_notes_visible(u)
+    children=visible_students(u) if u['role'] in ('parent','student') else []
+    return render(request,'schedule',page_title='Мои занятия и расписание',clubs=filtered_clubs(u),
+                  lesson_notes=notes,children=children)
+
+@app.post('/schedule/lesson')
+def schedule_lesson_save(request:Request,csrf_token:str=Form('',alias='_csrf'),
+                club_id:int=Form(...),lesson_date:str=Form(...),lesson_time:str=Form(''),
+                topic:str=Form(''),assignment:str=Form(''),materials:str=Form(''),
+                teacher_note:str=Form('')):
+    u=must_staff(request,csrf_token)
+    allow_club(u,club_id,editing=True)
+    day=valid_date(lesson_date)
+    hour=clean(lesson_time,5)
+    if hour and not re.fullmatch(r'(?:[01]\d|2[0-3]):[0-5]\d',hour):
+        raise HTTPException(400,'Время указывайте в формате ЧЧ:ММ')
+    topic=clean(topic,200)
+    assignment=clean(assignment,1500)
+    materials=clean(materials,800)
+    teacher_note=clean(teacher_note,1500)
+    if not topic and not assignment and not materials and not teacher_note:
+        raise HTTPException(400,'Заполните хотя бы одно поле занятия')
+    with conn() as db:
+        db.execute('''INSERT INTO lesson_notes(club_id,lesson_date,lesson_time,topic,assignment,materials,teacher_note,updated_by)
+            VALUES(?,?,?,?,?,?,?,?) ON CONFLICT(club_id,lesson_date) DO UPDATE SET
+            lesson_time=excluded.lesson_time,topic=excluded.topic,assignment=excluded.assignment,
+            materials=excluded.materials,teacher_note=excluded.teacher_note,
+            updated_by=excluded.updated_by,updated_at=CURRENT_TIMESTAMP''',
+            (club_id,day,hour,topic,assignment,materials,teacher_note,u['id']))
+    log(u,'lesson_note_saved',f'{club_id}/{day}')
+    flash(request,'План занятия сохранён: ученики и родители увидят его в расписании')
+    return go('/schedule')
+
+@app.post('/schedule/lesson/delete')
+def schedule_lesson_delete(request:Request,csrf_token:str=Form('',alias='_csrf'),
+                       club_id:int=Form(...),lesson_date:str=Form(...)):
+    u=must_staff(request,csrf_token)
+    allow_club(u,club_id,editing=True)
+    day=valid_date(lesson_date)
+    run('DELETE FROM lesson_notes WHERE club_id=? AND lesson_date=?',(club_id,day))
+    log(u,'lesson_note_deleted',f'{club_id}/{day}')
+    flash(request,'Запись занятия удалена')
+    return go('/schedule')
 
 @app.get('/attendance')
 def attendance_page(request:Request,club_id:int=0,lesson_date:str=''):
@@ -588,7 +684,11 @@ def attendance_page(request:Request,club_id:int=0,lesson_date:str=''):
     if u['role'] in ('parent','student'):
         records=[r for r in records if r['student_id'] in {m['id'] for m in members}]
     marks={str(r['student_id']):r['status'] for r in records}
-    dates=rows('SELECT lesson_date,count(*) as count FROM attendance WHERE club_id=? GROUP BY lesson_date ORDER BY lesson_date DESC LIMIT 12',(club_id,)) if club_id else []
+    if club_id and u['role'] in ('parent','student'):
+        allowed_member_ids=[m['id'] for m in members]
+        dates=(rows(f"SELECT lesson_date,count(*) as count FROM attendance WHERE club_id=? AND student_id IN ({','.join('?' * len(allowed_member_ids))}) GROUP BY lesson_date ORDER BY lesson_date DESC LIMIT 12",(club_id,*allowed_member_ids)) if allowed_member_ids else [])
+    else:
+        dates=rows('SELECT lesson_date,count(*) as count FROM attendance WHERE club_id=? GROUP BY lesson_date ORDER BY lesson_date DESC LIMIT 12',(club_id,)) if club_id else []
     drafts=rows('SELECT n.*,s.fullname FROM notification_drafts n JOIN students s ON s.id=n.student_id WHERE n.club_id=? ORDER BY n.id DESC LIMIT 10',(club_id,)) if club_id and u['role'] in ('admin','teacher') else []
     return render(request,'attendance',page_title='Журнал посещаемости',clubs=clubs,selected=club_id,lesson_date=lesson_date,members=members,marks=marks,dates=dates,drafts=drafts)
 
@@ -1196,6 +1296,10 @@ def api_staff(u):
 def api_fields(data,fields):
     return {k:data[k] for k in fields if k in data}
 
+@app.get('/api/v1/lesson-notes')
+def api_lesson_notes(start:str='',end:str='',u=Depends(apiuser)):
+    return lesson_notes_visible(u,start or None,end or None)
+
 @app.get('/api/v1/schedule')
 def api_schedule(u=Depends(apiuser)):
     return [{k:c[k] for k in ('id','title','weekdays','time','room','teacher_name')} for c in filtered_clubs(u)]
@@ -1407,20 +1511,35 @@ def api_achievement_attachment(aid:int,u=Depends(apiuser)):
 # Every query is scoped to an authenticated user. Messages never enter the audit log.
 CHAT_LIMIT = 1200
 
+def require_chat_user(request):
+    user=require(request)
+    # The perpetual service administrator is a technical identity, never a chat user.
+    if user.get('is_service_admin'):
+        raise HTTPException(403,'Техническая учётная запись не участвует в чатах')
+    return user
+
 def chat_room(user, room_key):
+    if user.get('is_service_admin'):
+        raise HTTPException(403,'Техническая учётная запись не участвует в чатах')
     if room_key == 'general':
         return ('general', None)
     if room_key == 'admins':
-        if user['role'] != 'admin':
+        if user['role'] != 'admin' or user.get('is_service_admin'):
             raise HTTPException(403, 'Чат администраторов доступен только администраторам')
         return ('admins', None)
     if isinstance(room_key, str) and room_key.startswith('dm:') and room_key[3:].isdigit():
         target_id = int(room_key[3:])
         if target_id == user['id']:
             raise HTTPException(400, 'Нельзя отправлять сообщение самому себе')
-        target = one('SELECT id FROM users WHERE id=? AND active=1', (target_id,))
+        target = one('SELECT id FROM users WHERE id=? AND active=1 AND is_service_admin=0', (target_id,))
         if target is None:
             raise HTTPException(404, 'Пользователь недоступен')
+        known=one('''SELECT 1 FROM chat_contacts WHERE owner_id=? AND peer_id=?
+            UNION SELECT 1 FROM chat_messages WHERE room='dm' AND
+             ((sender_id=? AND recipient_id=?) OR (sender_id=? AND recipient_id=?)) LIMIT 1''',
+             (user['id'],target_id,user['id'],target_id,target_id,user['id']))
+        if known is None:
+            raise HTTPException(403,'Сначала найдите пользователя по логину и начните диалог')
         return ('dm', target_id)
     raise HTTPException(400, 'Неизвестный чат')
 
@@ -1429,10 +1548,15 @@ def chat_room_clause(user, room_key):
     if scope == 'dm':
         return ('m.room=\'dm\' AND ((m.sender_id=? AND m.recipient_id=?) OR (m.sender_id=? AND m.recipient_id=?))',
                 (user['id'],peer,peer,user['id']))
-    return ('m.room=?', (scope,))
+    return ("m.room=? AND m.sender_id NOT IN (SELECT id FROM users WHERE is_service_admin=1)", (scope,))
 
 def chat_visible_message(user, message):
-    if not message: return False
+    if not message or user.get('is_service_admin'):return False
+    sender=one('SELECT is_service_admin FROM users WHERE id=?',(message['sender_id'],))
+    if not sender or sender['is_service_admin']:return False
+    if message.get('recipient_id'):
+        recipient=one('SELECT is_service_admin FROM users WHERE id=?',(message['recipient_id'],))
+        if not recipient or recipient['is_service_admin']:return False
     if message['room'] == 'general': return True
     if message['room'] == 'admins': return user['role'] == 'admin'
     return message['room'] == 'dm' and user['id'] in (message['sender_id'],message['recipient_id'])
@@ -1447,38 +1571,77 @@ def chat_unread(user, room_key):
     return row['n'] if row else 0
 
 def chat_roles(user):
-    peers = rows('''SELECT id,username,display_name,role FROM users
-        WHERE active=1 AND id<>? ORDER BY display_name COLLATE NOCASE LIMIT 500''',(user['id'],))
-    rooms = [dict(key='general',title='Общий чат',type='group',unread=chat_unread(user,'general'))]
+    if user.get('is_service_admin'):raise HTTPException(403)
+    # Show only conversations chosen by this person or with existing messages.
+    # No automatic directory of all accounts, and no service administrator.
+    peers=rows('''SELECT u.id,u.username,u.display_name,u.role FROM users u
+        WHERE u.active=1 AND u.is_service_admin=0 AND u.id<>? AND (
+        EXISTS(SELECT 1 FROM chat_contacts cc WHERE cc.owner_id=? AND cc.peer_id=u.id)
+        OR EXISTS(SELECT 1 FROM chat_messages m WHERE m.room='dm' AND
+          ((m.sender_id=? AND m.recipient_id=u.id) OR (m.recipient_id=? AND m.sender_id=u.id)))
+        ) ORDER BY u.display_name COLLATE NOCASE LIMIT 150''',
+        (user['id'],user['id'],user['id'],user['id']))
+    rooms=[dict(key='general',title='Общий чат',type='group',unread=chat_unread(user,'general'))]
     if user['role']=='admin':
         rooms.append(dict(key='admins',title='Чат администраторов',type='group',unread=chat_unread(user,'admins')))
     for p in peers:
-        p['key'] = 'dm:'+str(p['id'])
-        p['unread'] = chat_unread(user,p['key'])
+        p['key']='dm:'+str(p['id'])
+        p['unread']=chat_unread(user,p['key'])
     return dict(rooms=rooms,contacts=peers,user_id=user['id'],user_role=user['role'])
+
+@app.get('/chat/api/search')
+def chat_find_people(request:Request,q:str=''):
+    user=require_chat_user(request)
+    query=clean(q,70).lstrip('@').strip()
+    if len(query)<3:return JSONResponse({'people':[]},headers={'Cache-Control':'no-store, private'})
+    # Search is explicit (>=3 chars), limited and prefers logins; never list all accounts.
+    match=query.replace('\\','\\\\').replace('%','\\%').replace('_','\\_')
+    people=rows('''SELECT id,username,display_name,role FROM users WHERE active=1
+        AND is_service_admin=0 AND id<>? AND (
+        username LIKE ? ESCAPE '\\' COLLATE NOCASE OR display_name LIKE ? ESCAPE '\\' COLLATE NOCASE)
+        ORDER BY CASE WHEN username LIKE ? ESCAPE '\\' COLLATE NOCASE THEN 0 ELSE 1 END,
+                 username COLLATE NOCASE LIMIT 15''',
+        (user['id'],match+'%', '%'+match+'%',match+'%'))
+    return JSONResponse({'people':people},headers={'Cache-Control':'no-store, private'})
+
+@app.post('/chat/api/contacts',status_code=201)
+async def chat_add_contact(request:Request):
+    user=require_chat_user(request)
+    check_csrf(request,request.headers.get('x-csrf-token',''))
+    payload=await json_payload(request)
+    try:peer_id=int(payload['peer_id'])
+    except (KeyError,ValueError,TypeError):raise HTTPException(400,'Укажите пользователя')
+    if peer_id==user['id']:raise HTTPException(400,'Выберите другого пользователя')
+    peer=one('SELECT id FROM users WHERE id=? AND active=1 AND is_service_admin=0',(peer_id,))
+    if not peer:raise HTTPException(404,'Пользователь недоступен')
+    with conn() as db:
+        db.execute('INSERT OR IGNORE INTO chat_contacts(owner_id,peer_id) VALUES(?,?)',
+                   (user['id'],peer_id))
+    return {'key':'dm:'+str(peer_id),'added':True}
+
 
 @app.get('/chat',response_class=HTMLResponse)
 def chat_page(request:Request):
-    require(request)
+    require_chat_user(request)
     result=render(request,'chat',page_title='Сообщения')
     result.headers['Cache-Control']='no-store, private'
     return result
 
 @app.get('/chat/api/rooms')
 def chat_list_rooms(request:Request):
-    user=require(request)
+    user=require_chat_user(request)
     return JSONResponse(chat_roles(user),headers={'Cache-Control':'no-store, private'})
 
 @app.get('/chat/api/unread')
 def chat_unread_total(request:Request):
-    user=require(request)
+    user=require_chat_user(request)
     data=chat_roles(user)
     total=sum(r['unread'] for r in data['rooms'])+sum(p['unread'] for p in data['contacts'])
     return JSONResponse({'unread':total},headers={'Cache-Control':'no-store, private'})
 
 @app.get('/chat/api/messages')
 def chat_list_messages(request:Request,room:str='general',after:int=0,before:int=0):
-    user=require(request)
+    user=require_chat_user(request)
     if after < 0 or before < 0 or (after and before): raise HTTPException(400,'Неверный номер сообщения')
     clause,params=chat_room_clause(user,room)
     base='''SELECT m.id,m.sender_id,m.room,m.recipient_id,m.body,m.created_at,m.deleted_at,
@@ -1503,7 +1666,7 @@ def chat_list_messages(request:Request,room:str='general',after:int=0,before:int
 
 @app.post('/chat/api/read')
 async def chat_mark_read(request:Request):
-    user=require(request)
+    user=require_chat_user(request)
     check_csrf(request,request.headers.get('x-csrf-token',''))
     payload=await json_payload(request)
     room=payload.get('room','general')
@@ -1518,7 +1681,7 @@ async def chat_mark_read(request:Request):
 
 @app.post('/chat/api/send',status_code=201)
 async def chat_send_message(request:Request):
-    user=require(request)
+    user=require_chat_user(request)
     check_csrf(request,request.headers.get('x-csrf-token',''))
     try: length=int(request.headers.get('content-length','0') or 0)
     except ValueError: length=10001
@@ -1542,7 +1705,7 @@ async def chat_send_message(request:Request):
 
 @app.post('/chat/api/messages/{message_id}/delete')
 async def chat_delete_message(request:Request,message_id:int):
-    user=require(request)
+    user=require_chat_user(request)
     check_csrf(request,request.headers.get('x-csrf-token',''))
     message=one('SELECT * FROM chat_messages WHERE id=?',(message_id,))
     if not chat_visible_message(user,message):raise HTTPException(404,'Сообщение не найдено')
@@ -1556,7 +1719,7 @@ async def chat_delete_message(request:Request,message_id:int):
 
 @app.post('/chat/api/messages/{message_id}/report',status_code=201)
 async def chat_report_message(request:Request,message_id:int):
-    user=require(request)
+    user=require_chat_user(request)
     check_csrf(request,request.headers.get('x-csrf-token',''))
     message=one('SELECT * FROM chat_messages WHERE id=? AND deleted_at IS NULL',(message_id,))
     if not chat_visible_message(user,message):raise HTTPException(404,'Сообщение не найдено')
@@ -1570,13 +1733,15 @@ async def chat_report_message(request:Request,message_id:int):
 
 @app.get('/chat/api/reports')
 def chat_reports(request:Request):
-    user=require(request,('admin',))
+    user=require_chat_user(request)
+    if user['role']!='admin':raise HTTPException(403,'Недоступно')
     # Only reported messages are visible to moderators; never browse private conversations.
     reports=rows('''SELECT f.id,f.message_id,f.reason,f.created_at,
         m.room,m.body,m.deleted_at,
         su.display_name AS sender_name,ru.display_name AS reporter_name
         FROM chat_reports f JOIN chat_messages m ON m.id=f.message_id
         JOIN users su ON su.id=m.sender_id JOIN users ru ON ru.id=f.reporter_id
+        WHERE su.is_service_admin=0 AND ru.is_service_admin=0
         ORDER BY f.id DESC LIMIT 100''')
     return JSONResponse({'reports':reports},headers={'Cache-Control':'no-store, private'})
 

@@ -1,0 +1,12 @@
+/* ÜiirmeHub dated lessons — responsive, readable for parents and students */
+.lesson-detail-list{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,340px),1fr));gap:14px}
+.lesson-note-card{padding:22px;overflow-wrap:anywhere}
+.lesson-note-card p{white-space:pre-wrap;line-height:1.6;margin:10px 0}
+.lesson-note-header{display:flex;align-items:flex-start;gap:12px;justify-content:space-between;margin-bottom:15px}
+.lesson-note-header small{color:var(--muted,#68798c)}
+.lesson-note-header h3{margin:6px 0}
+.lesson-editor textarea{width:100%;resize:vertical}
+@media(max-width:740px){.lesson-note-card{padding:16px}.lesson-detail-list{grid-template-columns:1fr}}
+
+.chat-room-list[hidden]{display:none!important}
+#chat-search-results:not([hidden]){padding:8px;margin:8px 0;border:1px solid rgba(110,145,169,.35);border-radius:12px}

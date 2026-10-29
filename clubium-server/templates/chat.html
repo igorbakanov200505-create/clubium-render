@@ -6,10 +6,10 @@
   <section class="chat-shell" aria-label="Сообщения ÜiirmeHub">
     <aside class="chat-directory" aria-label="Список чатов">
       <div class="chat-directory-head"><div class="chat-directory-title"><span class="chat-mini-icon">✉</span><strong data-chat-i18n="chats">Чаты</strong><span class="chat-total-unread" id="chat-unread-total" hidden></span><button id="chat-reports-btn" class="chat-mod-button" type="button" hidden title="Жалобы">⚑</button></div>
-       <label class="chat-search"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m16 16 5 5"/></svg><input id="chat-search" type="search" autocomplete="off" maxlength="100" placeholder="Поиск людей" data-chat-i18n-placeholder="search"/></label>
+       <label class="chat-search"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m16 16 5 5"/></svg><input id="chat-search" type="search" autocomplete="off" maxlength="100" placeholder="Поиск по логину (от 3 букв)" data-chat-i18n-placeholder="search"/></label>
       </div>
       <div class="chat-list-container"><h2 data-chat-i18n="channels">Каналы</h2><div id="chat-rooms" class="chat-room-list"></div>
-      <h2 data-chat-i18n="personal">Личные сообщения</h2><div id="chat-contacts" class="chat-room-list"></div></div>
+      <h2 data-chat-i18n="personal">Выбранные собеседники</h2><div id="chat-search-results" class="chat-room-list" hidden></div><div id="chat-contacts" class="chat-room-list"></div></div>
       <p class="chat-dir-foot" data-chat-i18n="privacy">Личные переписки закрыты для посторонних. На сообщения можно пожаловаться модератору.</p>
     </aside>
     <div class="chat-conversation">
