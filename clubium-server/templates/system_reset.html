@@ -12,13 +12,15 @@
     <p><strong>Статус GitHub-копий:</strong> {{'включены' if backup_enabled else 'отключены — восстановление не гарантируется'}}.</p>
     <p>Обычные аккаунты: <strong>{{(counts.get('users',0)-1) if counts.get('users',0)>0 else 0}}</strong>. Кружки: <strong>{{counts.get('clubs',0)}}</strong>. Ученики: <strong>{{counts.get('students',0)}}</strong>.</p>
   </div>
+  {% if error %}<div class="registration-panel system-reset-error" role="alert"><strong>Не удалось подтвердить действие.</strong><p>{{error}}</p></div>{% endif %}
   <div class="system-reset-columns">
     <section class="registration-panel">
       <h2>1. Удалить обычные аккаунты</h2>
       <p>Удаляются все администраторы (кроме технического), учителя, родители и ученики как учётные записи. Школьные кружки, карточки учеников, отчёты и посещаемость сохраняются; связи с удалёнными аккаунтами очищаются.</p>
       <form action="/system/reset" method="post" class="system-reset-form" autocomplete="off">
         <input type="hidden" name="_csrf" value="{{csrf}}"><input type="hidden" name="mode" value="accounts">
-        <label>Напечатайте <code>УДАЛИТЬ АККАУНТЫ</code><input name="confirm" required autocomplete="off" placeholder="УДАЛИТЬ АККАУНТЫ"></label>
+        <label>Введите фразу <code>УДАЛИТЬ АККАУНТЫ</code><input name="confirm" required autocomplete="off" placeholder="УДАЛИТЬ АККАУНТЫ" spellcheck="false"></label>
+        <button type="button" class="btn ghost small" data-copy-reset-phrase="УДАЛИТЬ АККАУНТЫ">⧉ Подставить фразу</button>
         <label>Текущий пароль главного администратора<input type="password" name="current_password" required autocomplete="current-password"></label>
         <button type="submit" class="btn subtle full">Удалить обычные аккаунты</button>
       </form>
@@ -28,7 +30,8 @@
       <p>Удаляются все обычные аккаунты, кружки, ученики, посещаемость, чаты, задания, отчёты и загруженные файлы. Останутся только структура базы и технический аккаунт.</p>
       <form action="/system/reset" method="post" class="system-reset-form" autocomplete="off">
         <input type="hidden" name="_csrf" value="{{csrf}}"><input type="hidden" name="mode" value="full">
-        <label>Напечатайте <code>СТЕРЕТЬ ВСЁ</code><input name="confirm" required autocomplete="off" placeholder="СТЕРЕТЬ ВСЁ"></label>
+        <label>Введите фразу <code>СТЕРЕТЬ ВСЁ</code><input name="confirm" required autocomplete="off" placeholder="СТЕРЕТЬ ВСЁ" spellcheck="false"></label>
+        <button type="button" class="btn ghost small" data-copy-reset-phrase="СТЕРЕТЬ ВСЁ">⧉ Подставить фразу</button>
         <label>Текущий пароль главного администратора<input type="password" name="current_password" required autocomplete="current-password"></label>
         <button type="submit" class="btn danger full" data-confirm-full-reset>Полностью очистить базу и файлы</button>
       </form>

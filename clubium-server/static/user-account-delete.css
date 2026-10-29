@@ -1,0 +1,11 @@
+/* User-management deletion UI — isolated from existing styles */
+.users-bulk-toolbar{display:flex;gap:12px;align-items:center;flex-wrap:wrap}
+.users-bulk-toolbar .search-wrap{flex:1;min-width:220px}
+.users-bulk-toolbar form{margin:0}
+#usersTable th:first-child,#usersTable td:first-child{width:38px;text-align:center}
+#usersTable [type="checkbox"]{width:17px;height:17px;cursor:pointer;accent-color:#dc4b55}
+.account-delete-cross{font-size:20px;line-height:1;min-width:35px;min-height:35px;font-weight:700}
+.users-delete-note{padding:8px 20px 18px;font-size:12px;color:var(--muted,#717b91);line-height:1.6}
+.system-reset-error{border:1px solid #eb6c73;background:#fff1f0;color:#8c1f29;margin:12px 0}
+.system-reset-error p{margin:6px 0 0}
+@media(max-width:600px){.users-bulk-toolbar .search-wrap{flex-basis:100%}#usersTable{min-width:920px}}

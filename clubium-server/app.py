@@ -1242,6 +1242,70 @@ def user_toggle(request:Request,target:int,csrf_token:str=Form('', alias='_csrf'
     run('UPDATE users SET active=? WHERE id=?',(0 if target_user['active'] else 1,target));log(u,'user_toggle',target)
     flash(request,'Статус пользователя изменён');return go('/users')
 
+# Account deletion belongs to the admin users page, not to system-wide reset.
+# The technical service account and the acting administrator are immutable.
+def delete_regular_accounts(request:Request, user_ids):
+    actor=require(request,('admin',))
+    try:
+        requested=list(user_ids)
+        ids=sorted(set(int(value) for value in requested))
+    except (TypeError, ValueError):
+        raise HTTPException(400,'Некорректный выбор пользователей')
+    if not ids or len(ids)>100 or any(uid<=0 for uid in ids):
+        raise HTTPException(400,'Выберите от 1 до 100 аккаунтов')
+    if actor['id'] in ids:
+        raise HTTPException(403,'Удалять собственный аккаунт нельзя')
+    placeholders=','.join('?' for _ in ids)
+    # A backup preflight avoids wiping records when the remote repository is down.
+    # The reentrant backup lock also serializes other uploads and this deletion.
+    with _github_backup._lock:
+        if _github_backup.enabled:
+            try:
+                _github_backup._ensure_private_repo()
+                _remote,sha=_github_backup._fetch_file()
+            except Exception as exc:
+                raise HTTPException(503,'GitHub недоступен. Удаление отменено; проверьте резервные копии.') from exc
+            if not sha:
+                raise HTTPException(503,'В GitHub нет текущей резервной копии. Удаление отменено.')
+            _github_backup._remote_sha=sha
+        with conn() as db:
+            matched=db.execute(f'SELECT id,username,is_service_admin FROM users WHERE id IN ({placeholders})',ids).fetchall()
+            if len(matched)!=len(ids):
+                raise HTTPException(404,'Один из выбранных аккаунтов уже удалён. Обновите список.')
+            if any(item['is_service_admin'] for item in matched):
+                raise HTTPException(403,'Технического главного администратора удалять запрещено')
+            db.execute(f'DELETE FROM users WHERE id IN ({placeholders}) AND is_service_admin=0',ids)
+            # SQLite can reuse old integer IDs. Invalidate stale sessions/API tokens.
+            new_epoch=secrets.token_urlsafe(32)
+            db.execute('UPDATE system_settings SET value=? WHERE key=?',(new_epoch,'session_epoch'))
+            db.execute('INSERT INTO audit_log(user_id,action,details) VALUES(?,?,?)',
+                       (actor['id'],'admin_delete_accounts','IDs: '+','.join(str(i) for i in ids)))
+        # Keep the actor signed in, while invalidating every old user session.
+        request.session['epoch']=new_epoch
+        if _github_backup.enabled:
+            try:
+                _github_backup.flush(force=True)
+            except Exception as exc:
+                raise HTTPException(503,'Аккаунты удалены локально, но зашифрованная копия GitHub НЕ обновлена. Не перезапускайте Render; проверьте Logs.') from exc
+    flash(request,f'Удалено аккаунтов: {len(ids)}. Старые сеансы пользователей завершены.')
+    return go('/users')
+
+
+@app.post('/users/{target}/delete')
+def delete_single_user(request:Request,target:int,csrf_token:str=Form('',alias='_csrf')):
+    require(request,('admin',))
+    check_csrf(request,csrf_token)
+    return delete_regular_accounts(request,[target])
+
+
+@app.post('/users/delete-selected')
+def delete_selected_users(request:Request,csrf_token:str=Form('',alias='_csrf'),
+                          user_ids:list[int]=Form(default=[])):
+    require(request,('admin',))
+    check_csrf(request,csrf_token)
+    return delete_regular_accounts(request,user_ids)
+
+
 def service_owner_only(request):
     user=require(request,('admin',))
     if user['is_service_admin']!=1:
@@ -1250,7 +1314,7 @@ def service_owner_only(request):
 
 
 @app.get('/system/reset')
-def system_reset_page(request:Request):
+def system_reset_page(request:Request, error=None):
     admin=service_owner_only(request)
     tables=rows("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name")
     summary={}
@@ -1263,7 +1327,7 @@ def system_reset_page(request:Request):
     return templates.TemplateResponse(request,'system_reset.html',dict(
         request=request,user=admin,csrf=csrf(request),notice=request.session.pop('notice',None),
         current='system',page_title='Сброс системы',counts=summary,
-        backup_enabled=_github_backup.enabled))
+        backup_enabled=_github_backup.enabled,error=error),status_code=400 if error else 200)
 
 
 def reset_local_data(mode, owner_id):
@@ -1309,8 +1373,12 @@ def system_reset_execute(request:Request,csrf_token:str=Form('',alias='_csrf'),
     admin=service_owner_only(request)
     check_csrf(request,csrf_token)
     phrases={'accounts':'УДАЛИТЬ АККАУНТЫ','full':'СТЕРЕТЬ ВСЁ'}
-    if mode not in phrases or confirm.strip()!=phrases[mode]:
-        raise HTTPException(400,'Неверная фраза подтверждения; данные не изменены')
+    # Normalize case, repeated whitespace and ё/е without weakening password/CSRF.
+    normalized=' '.join(confirm.strip().upper().replace('Ё','Е').split())
+    expected=' '.join(phrases.get(mode,'').replace('Ё','Е').split())
+    if mode not in phrases or normalized != expected:
+        return system_reset_page(request,
+            'Фраза подтверждения не совпадает. Нажмите «Подставить фразу» под нужным действием и вставьте её в поле. Ничего не удалено.')
     key=('system-reset',admin['id'],request.client.host if request.client else 'local')
     attempts[key]=[t for t in attempts[key] if time.monotonic()-t<900]
     if len(attempts[key])>=5:
