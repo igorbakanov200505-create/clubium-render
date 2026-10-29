@@ -109,6 +109,35 @@ CREATE TABLE IF NOT EXISTS audit_log (
 );
 CREATE INDEX IF NOT EXISTS idx_attendance_date ON attendance(lesson_date,club_id);
 CREATE INDEX IF NOT EXISTS idx_achievement_student ON achievements(student_id);
+CREATE TABLE IF NOT EXISTS chat_messages (
+ id INTEGER PRIMARY KEY AUTOINCREMENT,
+ sender_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+ room TEXT NOT NULL CHECK(room IN ('general','admins','dm')),
+ recipient_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+ body TEXT NOT NULL CHECK(length(body) BETWEEN 1 AND 1200),
+ created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+ deleted_at TEXT,
+ CHECK((room='dm' AND recipient_id IS NOT NULL AND recipient_id != sender_id)
+    OR (room IN ('general','admins') AND recipient_id IS NULL))
+);
+CREATE INDEX IF NOT EXISTS chat_by_group ON chat_messages(room,id) WHERE room IN ('general','admins');
+CREATE INDEX IF NOT EXISTS chat_by_sender ON chat_messages(sender_id,recipient_id,id) WHERE room='dm';
+CREATE INDEX IF NOT EXISTS chat_by_recipient ON chat_messages(recipient_id,sender_id,id) WHERE room='dm';
+CREATE TABLE IF NOT EXISTS chat_reads (
+ reader_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+ room_key TEXT NOT NULL,
+ last_message_id INTEGER NOT NULL DEFAULT 0,
+ PRIMARY KEY(reader_id,room_key)
+);
+CREATE TABLE IF NOT EXISTS chat_reports (
+ id INTEGER PRIMARY KEY AUTOINCREMENT,
+ message_id INTEGER NOT NULL REFERENCES chat_messages(id) ON DELETE CASCADE,
+ reporter_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+ reason TEXT NOT NULL DEFAULT '',
+ created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+ UNIQUE(message_id,reporter_id)
+);
+
 '''
 
 @contextmanager
@@ -1046,3 +1075,181 @@ def api_achievement_attachment(aid:int,u=Depends(apiuser)):
     target=INSTANCE/'uploads'/Path(a['attachment']).name
     if not target.is_file():raise HTTPException(404)
     return FileResponse(target,filename='smartclub-diploma'+target.suffix,media_type='application/octet-stream',headers={'Cache-Control':'no-store','X-Content-Type-Options':'nosniff'})
+
+
+# --- Clubium Messenger: school-wide chat, administrator channel and private messages ---
+# Every query is scoped to an authenticated user. Messages never enter the audit log.
+CHAT_LIMIT = 1200
+
+def chat_room(user, room_key):
+    if room_key == 'general':
+        return ('general', None)
+    if room_key == 'admins':
+        if user['role'] != 'admin':
+            raise HTTPException(403, 'Чат администраторов доступен только администраторам')
+        return ('admins', None)
+    if isinstance(room_key, str) and room_key.startswith('dm:') and room_key[3:].isdigit():
+        target_id = int(room_key[3:])
+        if target_id == user['id']:
+            raise HTTPException(400, 'Нельзя отправлять сообщение самому себе')
+        target = one('SELECT id FROM users WHERE id=? AND active=1', (target_id,))
+        if target is None:
+            raise HTTPException(404, 'Пользователь недоступен')
+        return ('dm', target_id)
+    raise HTTPException(400, 'Неизвестный чат')
+
+def chat_room_clause(user, room_key):
+    scope, peer = chat_room(user, room_key)
+    if scope == 'dm':
+        return ('m.room=\'dm\' AND ((m.sender_id=? AND m.recipient_id=?) OR (m.sender_id=? AND m.recipient_id=?))',
+                (user['id'],peer,peer,user['id']))
+    return ('m.room=?', (scope,))
+
+def chat_visible_message(user, message):
+    if not message: return False
+    if message['room'] == 'general': return True
+    if message['room'] == 'admins': return user['role'] == 'admin'
+    return message['room'] == 'dm' and user['id'] in (message['sender_id'],message['recipient_id'])
+
+def chat_unread(user, room_key):
+    clause, vals = chat_room_clause(user, room_key)
+    row = one('''SELECT count(*) AS n FROM chat_messages m
+        LEFT JOIN chat_reads r ON r.reader_id=? AND r.room_key=?
+        WHERE ''' + clause + ''' AND m.sender_id<>? AND m.deleted_at IS NULL
+        AND m.id>COALESCE(r.last_message_id,0)''',
+        (user['id'],room_key,*vals,user['id']))
+    return row['n'] if row else 0
+
+def chat_roles(user):
+    peers = rows('''SELECT id,username,display_name,role FROM users
+        WHERE active=1 AND id<>? ORDER BY display_name COLLATE NOCASE LIMIT 500''',(user['id'],))
+    rooms = [dict(key='general',title='Общий чат',type='group',unread=chat_unread(user,'general'))]
+    if user['role']=='admin':
+        rooms.append(dict(key='admins',title='Чат администраторов',type='group',unread=chat_unread(user,'admins')))
+    for p in peers:
+        p['key'] = 'dm:'+str(p['id'])
+        p['unread'] = chat_unread(user,p['key'])
+    return dict(rooms=rooms,contacts=peers,user_id=user['id'],user_role=user['role'])
+
+@app.get('/chat',response_class=HTMLResponse)
+def chat_page(request:Request):
+    require(request)
+    result=render(request,'chat',page_title='Сообщения')
+    result.headers['Cache-Control']='no-store, private'
+    return result
+
+@app.get('/chat/api/rooms')
+def chat_list_rooms(request:Request):
+    user=require(request)
+    return JSONResponse(chat_roles(user),headers={'Cache-Control':'no-store, private'})
+
+@app.get('/chat/api/unread')
+def chat_unread_total(request:Request):
+    user=require(request)
+    data=chat_roles(user)
+    total=sum(r['unread'] for r in data['rooms'])+sum(p['unread'] for p in data['contacts'])
+    return JSONResponse({'unread':total},headers={'Cache-Control':'no-store, private'})
+
+@app.get('/chat/api/messages')
+def chat_list_messages(request:Request,room:str='general',after:int=0,before:int=0):
+    user=require(request)
+    if after < 0 or before < 0 or (after and before): raise HTTPException(400,'Неверный номер сообщения')
+    clause,params=chat_room_clause(user,room)
+    base='''SELECT m.id,m.sender_id,m.room,m.recipient_id,m.body,m.created_at,m.deleted_at,
+         u.display_name AS sender_name,u.username AS sender_login,u.role AS sender_role
+         FROM chat_messages m JOIN users u ON u.id=m.sender_id WHERE ''' + clause
+    if after:
+        items=rows(base+' AND m.id>? ORDER BY m.id ASC LIMIT 100', (*params,after))
+    elif before:
+        items=rows(base+' AND m.id<? ORDER BY m.id DESC LIMIT 60', (*params,before))
+        items.reverse()
+    else:
+        items=rows(base+' ORDER BY m.id DESC LIMIT 80', params)
+        items.reverse()
+    for m in items:
+        m['deleted'] = bool(m['deleted_at'])
+        if m['deleted']:
+            m['body']=''
+        del m['deleted_at']
+    # Tombstones allow clients to update older messages when a moderator deletes one.
+    deleted=rows('SELECT m.id FROM chat_messages m WHERE '+clause+' AND m.deleted_at IS NOT NULL ORDER BY m.id DESC LIMIT 150',params)
+    return JSONResponse({'messages':items,'has_more':len(items)==(60 if before else 80),'deleted_ids':[x['id'] for x in deleted]},headers={'Cache-Control':'no-store, private'})
+
+@app.post('/chat/api/read')
+async def chat_mark_read(request:Request):
+    user=require(request)
+    check_csrf(request,request.headers.get('x-csrf-token',''))
+    payload=await json_payload(request)
+    room=payload.get('room','general')
+    clause,vals=chat_room_clause(user,room)
+    last=one('SELECT MAX(m.id) AS id FROM chat_messages m WHERE '+clause,vals)
+    last_id=last['id'] or 0
+    with conn() as db:
+        db.execute('''INSERT INTO chat_reads(reader_id,room_key,last_message_id) VALUES(?,?,?)
+            ON CONFLICT(reader_id,room_key) DO UPDATE SET last_message_id=MAX(chat_reads.last_message_id,excluded.last_message_id)''',
+            (user['id'],room,last_id))
+    return {'ok':True}
+
+@app.post('/chat/api/send',status_code=201)
+async def chat_send_message(request:Request):
+    user=require(request)
+    check_csrf(request,request.headers.get('x-csrf-token',''))
+    try: length=int(request.headers.get('content-length','0') or 0)
+    except ValueError: length=10001
+    if length>10000:raise HTTPException(413,'Сообщение слишком большое')
+    data=await json_payload(request)
+    room_key=data.get('room','general')
+    scope,peer=chat_room(user,room_key)
+    body=str(data.get('text','')).strip()
+    if not body or len(body)>CHAT_LIMIT:
+        raise HTTPException(400,'Введите сообщение длиной от 1 до 1200 символов')
+    # DB rate-limits work across workers; protect students and staff against chat flooding.
+    recent=one('''SELECT count(*) AS n FROM chat_messages
+        WHERE sender_id=? AND created_at>=datetime('now','-10 seconds')''',(user['id'],))
+    hour=one('''SELECT count(*) AS n FROM chat_messages
+        WHERE sender_id=? AND created_at>=datetime('now','-1 hour')''',(user['id'],))
+    if recent['n']>=6 or hour['n']>=240:
+        raise HTTPException(429,'Слишком много сообщений. Попробуйте немного позже.')
+    message_id=run('INSERT INTO chat_messages(sender_id,room,recipient_id,body) VALUES(?,?,?,?)',
+                   (user['id'],scope,peer,body))
+    return {'id':message_id,'sent':True}
+
+@app.post('/chat/api/messages/{message_id}/delete')
+async def chat_delete_message(request:Request,message_id:int):
+    user=require(request)
+    check_csrf(request,request.headers.get('x-csrf-token',''))
+    message=one('SELECT * FROM chat_messages WHERE id=?',(message_id,))
+    if not chat_visible_message(user,message):raise HTTPException(404,'Сообщение не найдено')
+    # Admins can moderate group chats, but never another user's private messages.
+    can_delete=(message['sender_id']==user['id'] or
+                (user['role']=='admin' and message['room'] in ('general','admins')))
+    if not can_delete:raise HTTPException(403,'Нет права удалять сообщение')
+    run('UPDATE chat_messages SET deleted_at=CURRENT_TIMESTAMP,body=? WHERE id=? AND deleted_at IS NULL',('Сообщение удалено',message_id))
+    log(user,'chat_message_deleted',str(message_id))
+    return {'deleted':True}
+
+@app.post('/chat/api/messages/{message_id}/report',status_code=201)
+async def chat_report_message(request:Request,message_id:int):
+    user=require(request)
+    check_csrf(request,request.headers.get('x-csrf-token',''))
+    message=one('SELECT * FROM chat_messages WHERE id=? AND deleted_at IS NULL',(message_id,))
+    if not chat_visible_message(user,message):raise HTTPException(404,'Сообщение не найдено')
+    if message['sender_id']==user['id']:raise HTTPException(400,'Нельзя жаловаться на своё сообщение')
+    data=await json_payload(request)
+    reason=clean(data.get('reason','Неподходящее сообщение'),180) or 'Неподходящее сообщение'
+    with conn() as db:
+        db.execute('INSERT OR IGNORE INTO chat_reports(message_id,reporter_id,reason) VALUES(?,?,?)',
+                   (message_id,user['id'],reason))
+    return {'reported':True}
+
+@app.get('/chat/api/reports')
+def chat_reports(request:Request):
+    user=require(request,('admin',))
+    # Only reported messages are visible to moderators; never browse private conversations.
+    reports=rows('''SELECT f.id,f.message_id,f.reason,f.created_at,
+        m.room,m.body,m.deleted_at,
+        su.display_name AS sender_name,ru.display_name AS reporter_name
+        FROM chat_reports f JOIN chat_messages m ON m.id=f.message_id
+        JOIN users su ON su.id=m.sender_id JOIN users ru ON ru.id=f.reporter_id
+        ORDER BY f.id DESC LIMIT 100''')
+    return JSONResponse({'reports':reports},headers={'Cache-Control':'no-store, private'})

@@ -1,0 +1,23 @@
+<div class="chat-page" data-clubium-chat data-user-id="{{user.id}}" data-csrf="{{csrf}}">
+  <div class="chat-intro">
+    <div><div class="eyebrow" data-chat-i18n="eyebrow">КЛУБИУМ · СВЯЗЬ</div><h1><span data-chat-i18n="title">Сообщения</span> <span class="chat-title-spark">✦</span></h1><p data-chat-i18n="subtitle">Обсуждайте занятия, делитесь новостями и общайтесь напрямую.</p></div>
+    <span class="chat-connection"><span class="chat-live-dot"></span><span data-chat-i18n="sync">Синхронизация сообщений</span></span>
+  </div>
+  <section class="chat-shell" aria-label="Сообщения Клубиум">
+    <aside class="chat-directory" aria-label="Список чатов">
+      <div class="chat-directory-head"><div class="chat-directory-title"><span class="chat-mini-icon">✉</span><strong data-chat-i18n="chats">Чаты</strong><span class="chat-total-unread" id="chat-unread-total" hidden></span><button id="chat-reports-btn" class="chat-mod-button" type="button" hidden title="Жалобы">⚑</button></div>
+       <label class="chat-search"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m16 16 5 5"/></svg><input id="chat-search" type="search" autocomplete="off" maxlength="100" placeholder="Поиск людей" data-chat-i18n-placeholder="search"/></label>
+      </div>
+      <div class="chat-list-container"><h2 data-chat-i18n="channels">Каналы</h2><div id="chat-rooms" class="chat-room-list"></div>
+      <h2 data-chat-i18n="personal">Личные сообщения</h2><div id="chat-contacts" class="chat-room-list"></div></div>
+      <p class="chat-dir-foot" data-chat-i18n="privacy">Личные переписки закрыты для посторонних. На сообщения можно пожаловаться модератору.</p>
+    </aside>
+    <div class="chat-conversation">
+      <header class="chat-conversation-head"><button type="button" id="chat-back" class="chat-back" aria-label="Назад к чатам">←</button><div class="chat-current-avatar" id="chat-current-avatar">✦</div><div class="chat-current-details"><strong id="chat-current-title">Общий чат</strong><span id="chat-current-subtitle" data-chat-i18n="chatInfo">Для всех зарегистрированных пользователей</span></div><button class="chat-refresh" id="chat-refresh" type="button" aria-label="Обновить чат" title="Обновить">↻</button></header>
+      <div class="chat-feed" id="chat-feed" role="log" aria-live="polite" aria-relevant="additions text"><div class="chat-loading" data-chat-i18n="loading">Загружаем сообщения…</div></div>
+      <div class="chat-error" id="chat-error" role="alert" hidden></div>
+      <form class="chat-composer" id="chat-composer"><div class="chat-composer-line"><label class="chat-compose-input"><span class="sr-only" data-chat-i18n="messageLabel">Текст сообщения</span><textarea id="chat-text" rows="1" maxlength="1200" placeholder="Напишите сообщение…" data-chat-i18n-placeholder="messagePlaceholder" required></textarea></label><button class="chat-send" id="chat-send" type="submit" aria-label="Отправить сообщение" title="Отправить"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"><path d="m4 20 16-8L4 4l2 7 8 1-8 1-2 7Z"/></svg></button></div><div class="chat-composer-meta"><span data-chat-i18n="enterHelp">Enter — отправить · Shift+Enter — новая строка</span><span id="chat-counter">0 / 1200</span></div></form>
+    </div>
+  </section>
+  <dialog class="chat-reports-modal" id="chat-reports-dialog" aria-label="Жалобы на сообщения"><div class="chat-reports-head"><strong data-chat-i18n="reports">Жалобы на сообщения</strong><button type="button" id="chat-reports-close" aria-label="Закрыть">×</button></div><div class="chat-reports-list" id="chat-reports-list"></div></dialog>
+</div>
