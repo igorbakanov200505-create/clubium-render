@@ -6,7 +6,7 @@ existing accounts, use the explicit `python keep_only_azrael.py --apply`.
 import os
 import secrets
 import re
-from app import INSTANCE, conn, password_hash
+from app import INSTANCE, conn, password_hash, _github_backup
 
 OWNER_USERNAME = 'AzraelLone'
 OWNER_PASSWORD_FILE = INSTANCE / 'СЛУЖЕБНЫЙ_АДМИН_ПЕРВЫЙ_ПАРОЛЬ.txt'
@@ -74,3 +74,5 @@ def setup():
 
 if __name__ == '__main__':
     setup()
+    if _github_backup.enabled:
+        _github_backup.flush(force=True)  # ensure first account and last changes are backed up before serving

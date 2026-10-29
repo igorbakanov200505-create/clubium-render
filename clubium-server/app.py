@@ -36,6 +36,10 @@ ROOT = Path(__file__).resolve().parent
 load_dotenv(ROOT / ".env", override=False)
 INSTANCE = Path(os.environ.get('SMARTCLUB_DATA_DIR') or str(ROOT / 'instance'))
 INSTANCE.mkdir(parents=True, exist_ok=True)
+from github_backup import GitHubEncryptedBackup
+_github_backup = GitHubEncryptedBackup(INSTANCE)
+# Restore BEFORE schema creation and before generating a new signing key.
+_github_backup.initialize()
 DB = INSTANCE / 'smartclub.sqlite3'
 KEYFILE = INSTANCE / 'secret.key'
 # For ephemeral cloud hosts, configure CLUBIUM_SESSION_SECRET as a persistent
@@ -228,14 +232,19 @@ def conn():
     con.row_factory = sqlite3.Row
     con.execute('PRAGMA foreign_keys=ON')
     con.execute('PRAGMA busy_timeout=10000')
+    changed = False
     try:
+        before_changes = con.total_changes
         yield con
+        changed = con.total_changes != before_changes
         con.commit()
     except Exception:
         con.rollback()
         raise
     finally:
         con.close()
+    if changed:
+        _github_backup.changed()  # encrypted backup is queued after successful commit
 
 # Safe migration for installations created before service administrator support.
 with conn() as db:
@@ -1345,3 +1354,9 @@ def chat_reports(request:Request):
         JOIN users su ON su.id=m.sender_id JOIN users ru ON ru.id=f.reporter_id
         ORDER BY f.id DESC LIMIT 100''')
     return JSONResponse({'reports':reports},headers={'Cache-Control':'no-store, private'})
+
+
+@app.get('/api/v1/admin/backup-status')
+def backup_status(request:Request):
+    require(request,('admin',))
+    return JSONResponse(_github_backup.status(), headers={'Cache-Control':'no-store, private'})

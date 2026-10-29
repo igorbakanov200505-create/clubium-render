@@ -1,0 +1,12 @@
+# EXAMPLE ONLY: fill values in Render Dashboard > clubium-render > Environment.
+# NEVER create a public file containing real values.
+CLUBIUM_GH_BACKUP_REPO=YOUR_GITHUB_USERNAME/clubium-private-backups
+CLUBIUM_GH_BACKUP_TOKEN=<FINE_GRAINED_TOKEN_FOR_PRIVATE_BACKUP_REPO_ONLY>
+CLUBIUM_GH_BACKUP_KEY=<AES_256_KEY_FROM_generate_backup_key.py>
+# Set ONLY for initial seeding of a truly EMPTY private backup repo. Remove after success.
+CLUBIUM_GH_INIT_EMPTY=1
+# Uploads are batched; DEFAULT = 120 seconds. No real-time consistency guarantee.
+CLUBIUM_GH_BACKUP_INTERVAL=120
+SMARTCLUB_HTTPS=1
+# Optional, keep session cookies stable across deploys, use a separate random 32+ char secret:
+CLUBIUM_SESSION_SECRET=<RANDOM_32_PLUS_CHAR_SESSION_SECRET>
