@@ -1,0 +1,9 @@
+{% extends 'base.html' %}{% block content %}
+<div class="page-heading"><div><a href="/support" class="link">← Все обращения</a><div class="eyebrow">ПОДДЕРЖКА · ОБРАЩЕНИЕ #{{ticket.id}}</div><h1>{{ticket.subject}}</h1><p>{{ticket.category}} · Автор: {{ticket.creator_name}}{% if user.role=='admin' %} (@{{ticket.creator_login}}){% endif %}</p></div><span class="support-status {% if ticket.status=='open' %}open{% endif %}">{{'Открыто' if ticket.status=='open' else 'Закрыто'}}</span></div>
+<section class="panel support-thread">
+ {% for m in messages %}<article class="support-message {% if m.sender_id==user.id %}own{% endif %}"><div class="support-message-meta"><strong>{{'Вы' if m.sender_id==user.id else m.author_name}}</strong> <span>{{m.created_at}}{% if m.sender_role=='admin' %} · Администратор{% endif %}</span></div><div class="support-message-body">{{m.body}}</div></article>
+ {% else %}<p class="muted">Сообщений пока нет.</p>{% endfor %}
+</section>
+{% if ticket.status=='open' %}<section class="panel support-reply"><h2>Ответить</h2><form method="post" action="/support/{{ticket.id}}/reply" class="form-stack"><input type="hidden" name="_csrf" value="{{csrf}}"><label>Ваше сообщение<textarea required name="message" maxlength="3500" rows="5" placeholder="Напишите ответ…"></textarea></label><button class="btn primary">Отправить ответ</button></form></section>{% else %}<section class="panel"><p>Обращение закрыто. {% if user.role!='admin' %}Вы можете создать новое обращение в разделе «Поддержка».{% endif %}</p></section>{% endif %}
+{% if user.role=='admin' %}<section class="panel"><form method="post" action="/support/{{ticket.id}}/status"><input type="hidden" name="_csrf" value="{{csrf}}"><input type="hidden" name="status" value="{{'closed' if ticket.status=='open' else 'open'}}"><button class="btn subtle" type="submit">{{'Закрыть обращение' if ticket.status=='open' else 'Снова открыть обращение'}}</button></form></section>{% endif %}
+{% endblock %}

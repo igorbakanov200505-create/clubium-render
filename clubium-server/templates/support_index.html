@@ -1,0 +1,12 @@
+{% extends 'base.html' %}{% block content %}
+<div class="page-heading"><div><div class="eyebrow">ÜIIRMEHUB · ОБРАЩЕНИЯ</div><h1>💬 Поддержка</h1><p>{% if user.role=='admin' %}Очередь обращений всех пользователей. Все администраторы могут отвечать.{% else %}Задайте вопрос администрации. Ваше обращение видите только вы и администраторы.{% endif %}</p></div></div>
+<div class="support-layout">
+ <section class="panel support-compose"><h2>Новое обращение</h2><form method="post" action="/support/new" class="form-stack">
+  <input type="hidden" name="_csrf" value="{{csrf}}"><label>Тема<input name="subject" required minlength="3" maxlength="140" placeholder="Например, не отображается расписание"></label>
+  <label>Категория<select name="category"><option>Вопрос</option><option>Помощь</option><option>Ошибка</option><option>Предложение</option><option>Другое</option></select></label>
+  <label>Сообщение<textarea name="message" required minlength="5" maxlength="3500" rows="6" placeholder="Расскажите, что произошло или какой у вас вопрос…"></textarea></label>
+  <button class="btn primary" type="submit">Отправить в поддержку</button></form><p class="muted small">Не отправляйте сюда пароли или секретные ключи.</p></section>
+ <section class="panel support-tickets"><h2>{% if user.role=='admin' %}Все обращения{% else %}Мои обращения{% endif %} <span class="count-hint">{{tickets|length}}</span></h2>
+ {% for t in tickets %}<a class="support-ticket-row" href="/support/{{t.id}}"><div><strong>{{t.subject}}</strong><small>#{{t.id}} · {{t.category}} · {{t.updated_at}}{% if user.role=='admin' %} · {{t.creator_name}} (@{{t.creator_login}}){% endif %}</small></div><span class="support-status {% if t.status=='open' %}open{% endif %}">{{'Открыто' if t.status=='open' else 'Закрыто'}}</span></a>
+ {% else %}<div class="empty">Обращений пока нет. Создайте первое сообщение через форму.</div>{% endfor %}</section>
+</div>{% endblock %}

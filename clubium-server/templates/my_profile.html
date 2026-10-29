@@ -1,0 +1,20 @@
+{% extends 'base.html' %}{% block content %}
+<div class="page-heading"><div><div class="eyebrow">МОЙ АККАУНТ</div><h1>👤 Мой профиль</h1><p>Фото и личные настройки можно менять самостоятельно. Имя и логин изменяет только администратор.</p></div></div>
+{% if error %}<div class="alert danger">{{error}}</div>{% endif %}
+<div class="profile-grid">
+ <section class="panel profile-card"><h2>Личные данные</h2>
+ {% if profile.profile_avatar %}<img class="profile-photo" src="/profile/photo" alt="Ваше фото профиля">{% else %}<div class="profile-round">{{user.display_name[:1]|upper}}</div>{% endif %}
+ <div class="profile-locked"><small class="muted">ФИО · только просмотр</small><b>{{user.display_name}}</b><small class="muted">Логин · только просмотр</small><b>@{{user.username}}</b></div>
+ <form action="/profile/photo" method="post" enctype="multipart/form-data" class="form-stack"><input type="hidden" name="_csrf" value="{{csrf}}"><label>Изменить фотографию<input type="file" name="photo" accept="image/jpeg,image/png,image/webp" required></label><small class="muted">JPG, PNG или WEBP, до 3 МБ. Изображение будет уменьшено.</small><button class="btn primary">Сохранить фото</button></form>
+ {% if profile.profile_avatar %}<form method="post" action="/profile/photo/remove"><input type="hidden" name="_csrf" value="{{csrf}}"><button class="btn ghost" type="submit">Удалить фото</button></form>{% endif %}
+ </section>
+ <div class="profile-password-wrap"><section class="panel profile-card"><h2>О себе</h2><form class="form-stack" action="/profile/settings" method="post"><input type="hidden" name="_csrf" value="{{csrf}}">
+ <label>Почта для контакта (не меняет логин)<input name="email" type="email" maxlength="180" value="{{profile.profile_email}}" placeholder="example@mail.com"></label>
+ <label>Немного обо мне<textarea name="about" rows="4" maxlength="450" placeholder="Например, интересы и кружки">{{profile.profile_about}}</textarea></label>
+ <input type="hidden" name="lang" value="{{profile.profile_lang}}"><input type="hidden" name="theme" value="{{profile.profile_theme}}">
+ <button class="btn primary">Сохранить настройки</button></form></section>
+ <section class="panel profile-card"><h2>Сменить пароль</h2><p class="muted">Это смена пароля после входа. При первом входе с временным кодом показывается отдельная форма.</p><form action="/profile/password" method="post" class="form-stack"><input type="hidden" name="_csrf" value="{{csrf}}">
+ <label>Текущий пароль<input type="password" name="current_password" required autocomplete="current-password"></label>
+ <label>Новый пароль (не менее 12 символов)<input type="password" name="new_password" minlength="12" maxlength="200" required autocomplete="new-password"></label>
+ <label>Повторите новый пароль<input type="password" name="repeat_password" minlength="12" maxlength="200" required autocomplete="new-password"></label><button class="btn primary">Сменить пароль</button></form></section></div>
+</div>{% endblock %}
