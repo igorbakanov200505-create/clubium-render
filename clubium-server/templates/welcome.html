@@ -21,7 +21,7 @@
     <div class="welcome-success" aria-hidden="true"><span>✓</span> Вход выполнен</div>
     <p class="welcome-subtitle">Ваше рабочее пространство готово</p>
     <div class="welcome-progress" aria-hidden="true"><span></span></div>
-    <a class="welcome-skip" href="/dashboard">Перейти в систему →</a>
+    <a class="welcome-skip" href="{{ after_login | default('/dashboard') }}">Перейти в систему →</a>
   </main>
 </body>
 </html>

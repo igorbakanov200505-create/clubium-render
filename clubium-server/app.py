@@ -29,6 +29,8 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from itsdangerous import URLSafeTimedSerializer, BadSignature, SignatureExpired
 from starlette.middleware.sessions import SessionMiddleware
+from starlette.exceptions import HTTPException as StarletteHTTPException
+from fastapi.exception_handlers import http_exception_handler
 
 ROOT = Path(__file__).resolve().parent
 load_dotenv(ROOT / ".env", override=False)
@@ -46,6 +48,57 @@ app = FastAPI(title='Клубиум API', version='1.0.0', docs_url='/api/docs',
 app.add_middleware(SessionMiddleware, secret_key=SECRET, same_site='lax', https_only=os.environ.get('SMARTCLUB_HTTPS', '0') == '1', max_age=8 * 3600)
 app.mount('/static', StaticFiles(directory=ROOT/'static'), name='static')
 templates = Jinja2Templates(directory=ROOT/'templates')
+
+def is_browser_page(request: Request) -> bool:
+    """Only HTML page navigations redirect. API/JSON endpoints still emit 401 JSON."""
+    path = request.url.path
+    if request.method not in ('GET', 'HEAD'):
+        return False
+    if path in ('/api', '/api/docs', '/openapi.json'):
+        return False
+    if path.startswith(('/api/', '/chat/api/', '/static/', '/.well-known/')):
+        return False
+    # JS calls to any endpoint are data requests, not browser navigation.
+    if request.headers.get('sec-fetch-mode') in ('cors', 'no-cors'):
+        return False
+    if request.headers.get('x-requested-with', '').lower() == 'xmlhttprequest':
+        return False
+    accept = request.headers.get('accept', '')
+    if 'application/json' in accept and 'text/html' not in accept:
+        return False
+    return True
+
+
+def remembered_destination(request: Request) -> str:
+    """Use only local, bounded paths as post-login destinations: no open redirects."""
+    path = request.url.path
+    query = request.url.query
+    target = path + ('?' + query if query else '')
+    if (not target.startswith('/') or target.startswith('//')
+            or '\\' in target or any(ord(ch) < 32 for ch in target)
+            or len(target) > 1200):
+        return '/dashboard'
+    if target in ('/', '/login', '/password', '/welcome', '/logout'):
+        return '/dashboard'
+    return target
+
+
+def sign_in_redirect(request: Request) -> RedirectResponse:
+    """Remember the private page without leaking it into a public login URL."""
+    request.session['after_login'] = remembered_destination(request)
+    response = RedirectResponse('/login', status_code=303)
+    response.headers['Cache-Control'] = 'no-store, private'
+    response.headers['Vary'] = 'Cookie'
+    return response
+
+
+@app.exception_handler(StarletteHTTPException)
+async def html_auth_error_handler(request: Request, exc: StarletteHTTPException):
+    """Unauthenticated pages redirect to login; API stays HTTP 401 JSON."""
+    if exc.status_code == 401 and is_browser_page(request):
+        return sign_in_redirect(request)
+    return await http_exception_handler(request, exc)
+
 
 SCHEMA = '''
 PRAGMA foreign_keys=ON;
@@ -214,7 +267,7 @@ def go(path): return RedirectResponse(path,status_code=303)
 
 def render(request, page, **ctx):
     user=get_user(request)
-    if not user: return go('/login')
+    if not user: return sign_in_redirect(request)
     if user['must_change_password'] and request.url.path!='/password': return go('/password')
     current=request.url.path.split('/')[1] or 'dashboard'
     notice=request.session.pop('notice',None)
@@ -311,7 +364,10 @@ def login_page(request:Request, error=None, status_code=200):
 
 @app.get('/login',response_class=HTMLResponse)
 def login_form(request:Request):
-    if get_user(request):return go('/dashboard')
+    if get_user(request):
+        user=get_user(request)
+        if user['must_change_password']:return go('/password')
+        return go(request.session.pop('after_login','/dashboard'))
     return login_page(request)
 
 @app.post('/login',response_class=HTMLResponse)
@@ -329,7 +385,9 @@ def login_post(request:Request,username:str=Form(...),password:str=Form(...),csr
         attempts[key].append(time.monotonic())
         return login_page(request,'Неверный логин или пароль',401)
     attempts.pop(key,None)
+    after_login=request.session.get('after_login','/dashboard')
     request.session.clear();request.session['uid']=u['id'];csrf(request)
+    request.session['after_login']=after_login
     request.session['show_welcome']=True
     log(u,'login')
     return go('/password' if u['must_change_password'] else '/welcome')
@@ -340,8 +398,9 @@ def welcome(request:Request):
     u=get_user(request)
     if not u:return go('/login')
     if u['must_change_password']:return go('/password')
-    if not request.session.pop('show_welcome',False):return go('/dashboard')
-    response=templates.TemplateResponse(request,'welcome.html',{'request':request,'user':u})
+    after_login=request.session.pop('after_login','/dashboard')
+    if not request.session.pop('show_welcome',False):return go(after_login)
+    response=templates.TemplateResponse(request,'welcome.html',{'request':request,'user':u,'after_login':after_login})
     response.headers['Cache-Control']='no-store, private'
     response.headers['Referrer-Policy']='no-referrer'
     return response
