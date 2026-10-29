@@ -1,0 +1,65 @@
+/* Clubium NOVA — fresh, responsive control center. */
+:root{--nova-ink:#132941;--nova-aqua:#15c9b3;--nova-glow:#2bdfc6;--nova-accent:#e7bd64;--nova-card-shadow:0 18px 55px rgba(31,66,100,.07)}
+body{font-family:Inter,ui-sans-serif,-apple-system,BlinkMacSystemFont,'Segoe UI',Arial,sans-serif;letter-spacing:-.006em}
+/* New visual identity: an understated luminous educational product */
+.sidebar{background:radial-gradient(ellipse at 50% -6%,#20696c44,transparent 55%),linear-gradient(180deg,#0b213a,#0a172b 92%);border-right:1px solid #163652}
+.sidebar:before{content:'';position:absolute;top:91px;left:20px;right:20px;height:1px;background:linear-gradient(90deg,transparent,#79c5b642,transparent)}
+.sidebar .nav-link{font-size:12.5px;letter-spacing:.01em;border-radius:13px;min-height:46px}
+.sidebar .nav-link.selected{background:linear-gradient(95deg,#164d53,#1b3e58);border-color:#2a8b8180;box-shadow:inset 3px 0 #39e1c5,0 6px 24px #00000020}
+.brand .clubium-logo-nav{border-radius:14px;filter:drop-shadow(0 5px 14px #29ecd14b)}
+.topbar{height:78px;background:rgba(255,255,255,.88);backdrop-filter:blur(20px);border-bottom-color:#e9f0f5}
+.toolbar-search{display:flex;gap:9px;align-items:center;border:1px solid #dbe9ee;padding:8px 10px;border-radius:13px;background:#f9fbfe;color:#6b8397;min-height:37px;cursor:pointer;font-weight:600;transition:.16s ease}
+.toolbar-search:hover,.toolbar-search:focus-visible{background:#ecf9f7;border-color:#9fdfd6;color:#168c83;box-shadow:0 0 0 3px #1ac5b414}
+.search-glyph{font-size:20px;font-weight:700;line-height:15px}.search-hint{font-size:12px}.toolbar-search kbd{font-family:inherit;font-size:10px;background:#eef3f7;padding:2px 5px;border-radius:5px;border:1px solid #dbe4eb;color:#90a1af}
+.main{background:radial-gradient(ellipse 47% 26% at 82% -7%,#d9f4edbf,transparent 75%),radial-gradient(ellipse 47% 40% at 1% 90%,#e8edf9,transparent 80%),#f5f8fc}
+.content .page-heading h1{letter-spacing:-.055em}
+.content .page-heading .eyebrow{color:#159d94;letter-spacing:.115em}
+.content .panel,.content .kpi{border:1px solid #e2edf2;box-shadow:var(--nova-card-shadow);border-radius:19px}
+.content .kpi{background:linear-gradient(145deg,#fff,#fbfeff)}
+.content .kpi strong{letter-spacing:-.05em}
+.content .panel:hover,.content .kpi:hover{box-shadow:0 22px 56px #144c6920}
+.content .panel{transition:box-shadow .22s ease,transform .22s ease}
+.content .panel:not(.table-panel):hover{transform:translateY(-2px)}
+.content .btn.primary,.login-panel .btn.primary{background:linear-gradient(115deg,#0fafa1,#10b8aa,#12a8b2);border-color:#0a9f96;box-shadow:0 10px 25px #0eaa9933}
+.content .btn.primary:hover,.login-panel .btn.primary:hover{background:linear-gradient(115deg,#0e9c94,#09aa9e,#149eac);box-shadow:0 15px 27px #0cae9b40}
+.content .tag,.content .num-chip{border-radius:9px}
+.content table tbody tr:hover{background:#f3fbfa}
+.content .search-wrap:focus-within{box-shadow:0 0 0 3px #18bda720;border-color:#6fd4c6}
+/* Login: hero lighting and a precise, compact form */
+.auth-body.premium-auth{background:#08192e}
+.premium-auth::before{background:radial-gradient(ellipse 42% 42% at 13% 16%,#1a9eac71,transparent 80%),radial-gradient(ellipse 40% 50% at 92% 84%,#144f9a66,transparent 80%),linear-gradient(145deg,#071427,#092941 50%,#081629)}
+.premium-auth .login-panel{background:linear-gradient(155deg,#fff 0%,#f7fdfe 100%);border:1px solid #ffffffeb;box-shadow:0 26px 90px #030f28a8,0 0 0 9px #ffffff08;min-height:470px}
+.premium-auth .login-panel::after{content:'';pointer-events:none;position:absolute;inset:1px;border-radius:inherit;border:1px solid #e0f2f166}
+.login-logo-frame{background:linear-gradient(135deg,#effefa,#e7f3fc);border-color:#d7efec}
+.clubium-language-switch .language-option{transition:transform .18s,box-shadow .18s,background .18s}
+.clubium-language-switch .language-option:hover{transform:translateY(-1px)}
+/* Live command palette */
+.nova-palette{border:1px solid #d9e7ed;box-shadow:0 30px 100px #04182a6b;width:min(530px,calc(100vw - 28px));max-height:min(600px,82svh);padding:0;border-radius:23px;background:#fff;color:#173147;overflow:hidden}
+.nova-palette::backdrop{background:#061b2ba8;backdrop-filter:blur(4px)}
+.palette-head{display:flex;align-items:center;gap:13px;padding:18px 17px;border-bottom:1px solid #e4edf1}
+.palette-head svg{width:22px;color:#0fafa4;flex:none}.palette-head input{border:0;outline:0;font:600 16px/1.4 inherit;width:100%;min-width:0;color:#214156}
+.palette-close{border:1px solid #e2ebf0;background:#f6fafb;color:#7b8e9b;padding:5px 9px;border-radius:8px;font-size:12px;cursor:pointer}
+.palette-results{padding:10px;max-height:330px;overflow:auto}
+.palette-result{display:flex;align-items:center;gap:13px;padding:11px 13px;color:#2b4861;border-radius:12px;text-decoration:none;font-size:14px;font-weight:650}
+.palette-result:hover,.palette-result.is-selected{background:#e8f8f4;color:#068e82}
+.palette-result-icon{width:27px;height:27px;display:grid;place-items:center}.palette-result-icon svg{width:21px;height:21px}.palette-arrow{margin-left:auto;color:#7fabb2}
+.palette-empty{padding:16px;color:#6b7c8e}.palette-hint{margin:0;padding:13px 18px;background:#f7fafb;color:#8796a4;font-size:11px}
+#nova-toast-region{position:fixed;z-index:2000;bottom:20px;right:25px;display:grid;gap:9px;pointer-events:none}
+.nova-toast{background:#103f49;color:#f8ffff;border:1px solid #25988f;border-radius:12px;box-shadow:0 12px 35px #0b2a3440;padding:13px 18px;animation:nova-in .26s ease both}
+.mobile-bottom-nav{display:none}
+@keyframes nova-in{from{opacity:0;transform:translateY(12px)}to{opacity:1;transform:translateY(0)}}
+/* Subtle entry on first load, without concealing content */
+.content .kpi,.content .club-card{animation:nova-in .33s ease both;animation-delay:calc(var(--entry-index,0) * 35ms)}
+/* Mobile app-like navigation with a predictable large tap area */
+@media(max-width:760px){
+ .toolbar-search{min-width:39px;justify-content:center;padding:7px}.toolbar-search .search-hint,.toolbar-search kbd{display:none}
+ .topbar{height:65px;padding-left:13px;padding-right:13px}.content{padding-bottom:94px!important}
+ .mobile-bottom-nav{display:flex;position:fixed;bottom:0;left:0;right:0;height:auto;min-height:75px;padding:6px max(8px,env(safe-area-inset-left)) calc(8px + env(safe-area-inset-bottom)) max(8px,env(safe-area-inset-right));z-index:90;overflow-x:auto;overscroll-behavior-x:contain;gap:4px;scrollbar-width:none;background:#ffffffef;backdrop-filter:blur(18px);border-top:1px solid #deebe9;box-shadow:0 -12px 37px #1c48600d}
+ .mobile-bottom-nav::-webkit-scrollbar{display:none}
+ .mobile-nav-item{display:flex;min-width:68px;flex:1 0 68px;max-width:110px;flex-direction:column;align-items:center;gap:2px;padding:6px 3px;border-radius:13px;text-decoration:none;color:#6a8293;font-size:9px;font-weight:750;white-space:nowrap;transition:background .2s,color .2s}
+ .mobile-nav-item.active{background:#def8ef;color:#0a9082}
+ .mobile-nav-icon{display:grid;place-items:center;width:26px;height:26px}.mobile-nav-icon svg{width:20px;height:20px}
+ .sidebar{z-index:110}.nova-palette{margin-top:9svh}
+}
+@media(max-width:390px){.mobile-nav-item{min-width:64px;flex-basis:64px}.top-actions{gap:6px}.toolbar-search{margin:0}}
+@media(prefers-reduced-motion:reduce){.content .kpi,.content .club-card,.nova-toast{animation:none!important}.content .panel,.toolbar-search,.mobile-nav-item{transition:none!important}}

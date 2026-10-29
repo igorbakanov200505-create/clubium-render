@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="robots" content="noindex,nofollow">
+  <meta http-equiv="Cache-Control" content="no-store">
+  <title>Добро пожаловать — Клубиум</title><link rel="icon" type="image/png" href="/static/icon-192.png">
+  <link rel="manifest" href="/static/site.webmanifest"><meta name="theme-color" content="#10233e"><link rel="stylesheet" href="/static/styles.css"><link rel="stylesheet" href="/static/nova.css">
+  <script src="/static/i18n.js" defer></script><script src="/static/welcome.js" defer></script><script src="/static/premium-ui.js" defer></script>
+</head>
+<body class="welcome-body">
+  <main class="welcome-stage" aria-live="polite"><div data-language-slot></div>
+    <div class="welcome-sparkles" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div>
+    <div class="welcome-orbit welcome-orbit-outer" aria-hidden="true"></div>
+    <div class="welcome-orbit welcome-orbit-inner" aria-hidden="true"></div>
+    <div class="welcome-emblem" aria-hidden="true"><img class="clubium-logo" src="/static/clubium-logo.png" alt="" width="94" height="94"></div>
+    <p class="welcome-kicker">КЛУБИУМ</p>
+    <h1>Добро пожаловать,</h1>
+    <p class="welcome-name">{{ user.display_name }}</p>
+    <div class="welcome-success" aria-hidden="true"><span>✓</span> Вход выполнен</div>
+    <p class="welcome-subtitle">Ваше рабочее пространство готово</p>
+    <div class="welcome-progress" aria-hidden="true"><span></span></div>
+    <a class="welcome-skip" href="/dashboard">Перейти в систему →</a>
+  </main>
+</body>
+</html>
