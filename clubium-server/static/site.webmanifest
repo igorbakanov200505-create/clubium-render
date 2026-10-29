@@ -1,7 +1,7 @@
 {
-  "name": "Клубиум — школьные кружки",
-  "short_name": "Клубиум",
-  "description": "Клубиум — платформа для школьных кружков / Мектеп үйірмелерін басқару / School club management",
+  "name": "ÜiirmeHub — школьные кружки",
+  "short_name": "ÜiirmeHub",
+  "description": "ÜiirmeHub — платформа для школьных кружков / Мектеп үйірмелерін басқару / School club management",
   "start_url": "/login",
   "scope": "/",
   "display": "standalone",

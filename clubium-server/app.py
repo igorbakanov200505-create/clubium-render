@@ -1,4 +1,4 @@
-"""Клубиум: school club management application.
+"""ÜiirmeHub: school club management application.
 
 SQLite + server-rendered UI + token-authenticated JSON API.
 Run `python bootstrap.py` once, then `uvicorn app:app --host 127.0.0.1 --port 8000`.
@@ -36,26 +36,15 @@ ROOT = Path(__file__).resolve().parent
 load_dotenv(ROOT / ".env", override=False)
 INSTANCE = Path(os.environ.get('SMARTCLUB_DATA_DIR') or str(ROOT / 'instance'))
 INSTANCE.mkdir(parents=True, exist_ok=True)
-from github_backup import GitHubEncryptedBackup
-_github_backup = GitHubEncryptedBackup(INSTANCE)
-# Restore BEFORE schema creation and before generating a new signing key.
-_github_backup.initialize()
 DB = INSTANCE / 'smartclub.sqlite3'
 KEYFILE = INSTANCE / 'secret.key'
-# For ephemeral cloud hosts, configure CLUBIUM_SESSION_SECRET as a persistent
-# secret environment variable. Otherwise a new container invalidates cookies.
-SESSION_SECRET = os.environ.get('CLUBIUM_SESSION_SECRET', '').strip()
-if SESSION_SECRET and len(SESSION_SECRET) < 32:
-    raise RuntimeError('CLUBIUM_SESSION_SECRET must be at least 32 characters')
-if not SESSION_SECRET:
-    if not KEYFILE.exists():
-        KEYFILE.write_text(secrets.token_urlsafe(48), encoding='utf-8')
-        try: KEYFILE.chmod(0o600)
-        except OSError: pass
-    SESSION_SECRET = KEYFILE.read_text(encoding='utf-8').strip()
-SECRET = SESSION_SECRET
+if not KEYFILE.exists():
+    KEYFILE.write_text(secrets.token_urlsafe(48), encoding='utf-8')
+    try: KEYFILE.chmod(0o600)
+    except OSError: pass
+SECRET = KEYFILE.read_text(encoding='utf-8').strip()
 serializer = URLSafeTimedSerializer(SECRET, salt='smartclub-api-v1')
-app = FastAPI(title='Клубиум API', version='1.0.0', docs_url='/api/docs', redoc_url=None)
+app = FastAPI(title='ÜiirmeHub API', version='1.0.0', docs_url='/api/docs', redoc_url=None)
 app.add_middleware(SessionMiddleware, secret_key=SECRET, same_site='lax', https_only=os.environ.get('SMARTCLUB_HTTPS', '0') == '1', max_age=8 * 3600)
 app.mount('/static', StaticFiles(directory=ROOT/'static'), name='static')
 templates = Jinja2Templates(directory=ROOT/'templates')
@@ -105,29 +94,7 @@ def sign_in_redirect(request: Request) -> RedirectResponse:
 
 @app.exception_handler(StarletteHTTPException)
 async def html_auth_error_handler(request: Request, exc: StarletteHTTPException):
-    """Keep form errors human-readable; do not weaken CSRF/API authorization."""
-    path = request.url.path
-    content_type = request.headers.get('content-type', '').lower()
-    is_html_form = (
-        request.method == 'POST'
-        and not path.startswith(('/api/', '/chat/api/'))
-        and (content_type.startswith('application/x-www-form-urlencoded')
-             or content_type.startswith('multipart/form-data'))
-    )
-    if exc.status_code == 403 and str(exc.detail) == 'CSRF token invalid' and is_html_form:
-        # Reject the action, rotate the old token, then show a fresh GET form.
-        # Never re-submit a modifying POST or turn off CSRF verification.
-        if path == '/logout':
-            request.session.clear()
-            return RedirectResponse('/login?session_expired=1', status_code=303)
-        request.session.pop('csrf', None)
-        if path == '/password' and request.session.get('uid'):
-            return RedirectResponse('/password?session_expired=1', status_code=303)
-        if request.session.get('uid'):
-            request.session['notice'] = ('Сессия формы устарела. Откройте форму и повторите действие.', 'danger')
-            return RedirectResponse('/dashboard', status_code=303)
-        request.session.clear()
-        return RedirectResponse('/login?session_expired=1', status_code=303)
+    """Unauthenticated pages redirect to login; API stays HTTP 401 JSON."""
     if exc.status_code == 401 and is_browser_page(request):
         return sign_in_redirect(request)
     return await http_exception_handler(request, exc)
@@ -232,19 +199,14 @@ def conn():
     con.row_factory = sqlite3.Row
     con.execute('PRAGMA foreign_keys=ON')
     con.execute('PRAGMA busy_timeout=10000')
-    changed = False
     try:
-        before_changes = con.total_changes
         yield con
-        changed = con.total_changes != before_changes
         con.commit()
     except Exception:
         con.rollback()
         raise
     finally:
         con.close()
-    if changed:
-        _github_backup.changed()  # encrypted backup is queued after successful commit
 
 # Safe migration for installations created before service administrator support.
 with conn() as db:
@@ -295,8 +257,7 @@ def csrf(request):
     return request.session['csrf']
 
 def check_csrf(request, token):
-    expected=request.session.get('csrf')
-    if not expected or not token or not hmac.compare_digest(str(expected),str(token)):
+    if not hmac.compare_digest(str(request.session.get('csrf','')),str(token or '')):
         raise HTTPException(403,'CSRF token invalid')
 
 def flash(request, message, level='success'):
@@ -310,7 +271,7 @@ def render(request, page, **ctx):
     if user['must_change_password'] and request.url.path!='/password': return go('/password')
     current=request.url.path.split('/')[1] or 'dashboard'
     notice=request.session.pop('notice',None)
-    data=dict(request=request,user=user,csrf=csrf(request),notice=notice,current=current,page=page,today=date.today().isoformat(),page_title=ctx.pop('page_title','Клубиум'))
+    data=dict(request=request,user=user,csrf=csrf(request),notice=notice,current=current,page=page,today=date.today().isoformat(),page_title=ctx.pop('page_title','ÜiirmeHub'))
     data.update(ctx)
     return templates.TemplateResponse(request,'pages.html',data)
 
@@ -389,7 +350,7 @@ def must_staff(request, token):
     u=require(request,('admin','teacher'));check_csrf(request,token);return u
 
 @app.get('/health')
-def health():return {'status':'ok','service':'Клубиум'}
+def health():return {'status':'ok','service':'ÜiirmeHub'}
 
 @app.get('/',response_class=HTMLResponse)
 def index(request:Request):return go('/dashboard' if get_user(request) else '/login')
@@ -407,14 +368,12 @@ def login_form(request:Request):
         user=get_user(request)
         if user['must_change_password']:return go('/password')
         return go(request.session.pop('after_login','/dashboard'))
-    message='Сессия устарела. Войдите заново.' if request.query_params.get('session_expired')=='1' else None
-    return login_page(request, error=message)
+    return login_page(request)
 
 @app.post('/login',response_class=HTMLResponse)
 def login_post(request:Request,username:str=Form(...),password:str=Form(...),csrf_token:str=Form('', alias='_csrf')):
     # Do not bypass CSRF protection. Reissue a clean session + visible HTML error.
-    expected=request.session.get('csrf')
-    if not expected or not csrf_token or not hmac.compare_digest(str(expected),str(csrf_token)):
+    if not hmac.compare_digest(str(request.session.get('csrf','')),str(csrf_token or '')):
         request.session.clear()
         return login_page(request,'Сессия входа устарела. Страница обновлена — попробуйте войти ещё раз.',403)
     client=request.client.host if request.client else 'local'
@@ -454,8 +413,7 @@ def logout(request:Request,csrf_token:str=Form('', alias='_csrf')):
 def password_form(request:Request):
     u=get_user(request)
     if not u:return go('/login')
-    err='Сессия формы устарела. Повторите смену пароля.' if request.query_params.get('session_expired')=='1' else None
-    return templates.TemplateResponse(request,'password.html',dict(request=request,csrf=csrf(request),user=u,error=err))
+    return templates.TemplateResponse(request,'password.html',dict(request=request,csrf=csrf(request),user=u,error=None))
 
 @app.post('/password',response_class=HTMLResponse)
 def password_post(request:Request,current:str=Form(...),new_password:str=Form(...),csrf_token:str=Form('', alias='_csrf')):
@@ -1178,7 +1136,7 @@ def api_achievement_attachment(aid:int,u=Depends(apiuser)):
     return FileResponse(target,filename='smartclub-diploma'+target.suffix,media_type='application/octet-stream',headers={'Cache-Control':'no-store','X-Content-Type-Options':'nosniff'})
 
 
-# --- Clubium Messenger: school-wide chat, administrator channel and private messages ---
+# --- ÜiirmeHub Messenger: school-wide chat, administrator channel and private messages ---
 # Every query is scoped to an authenticated user. Messages never enter the audit log.
 CHAT_LIMIT = 1200
 
@@ -1354,9 +1312,3 @@ def chat_reports(request:Request):
         JOIN users su ON su.id=m.sender_id JOIN users ru ON ru.id=f.reporter_id
         ORDER BY f.id DESC LIMIT 100''')
     return JSONResponse({'reports':reports},headers={'Cache-Control':'no-store, private'})
-
-
-@app.get('/api/v1/admin/backup-status')
-def backup_status(request:Request):
-    require(request,('admin',))
-    return JSONResponse(_github_backup.status(), headers={'Cache-Control':'no-store, private'})
