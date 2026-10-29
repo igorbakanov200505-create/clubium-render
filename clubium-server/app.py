@@ -510,15 +510,22 @@ def password_form(request:Request):
     return templates.TemplateResponse(request,'password.html',dict(request=request,csrf=csrf(request),user=u,error=err))
 
 @app.post('/password',response_class=HTMLResponse)
-def password_post(request:Request,current:str=Form(...),new_password:str=Form(...),csrf_token:str=Form('', alias='_csrf')):
+def password_post(request:Request,current:str=Form(''),new_password:str=Form(...),
+                  repeat_password:str=Form(''),csrf_token:str=Form('',alias='_csrf')):
     u=get_user(request)
     if not u:return go('/login')
     check_csrf(request,csrf_token)
     old=one('SELECT password_hash FROM users WHERE id=?',(u['id'],))
     err=None
-    if not password_ok(current,old['password_hash']):err='Текущий пароль неверный'
-    elif len(new_password)<12:err='Новый пароль должен содержать минимум 12 символов'
-    elif new_password==current:err='Укажите новый пароль, отличный от старого'
+    if not old:err='Аккаунт не найден'
+    elif not u['must_change_password'] and not password_ok(current,old['password_hash']):
+        err='Текущий пароль неверный'
+    elif len(new_password)<12 or len(new_password)>200:
+        err='Новый пароль должен содержать от 12 до 200 символов'
+    elif new_password!=repeat_password:
+        err='Новые пароли не совпадают'
+    elif password_ok(new_password,old['password_hash']):
+        err='Новый пароль должен отличаться от старого'
     if err:return templates.TemplateResponse(request,'password.html',dict(request=request,csrf=csrf(request),user=u,error=err),status_code=400)
     run('UPDATE users SET password_hash=?,must_change_password=0,temporary_password_expires=NULL WHERE id=?',(password_hash(new_password),u['id']))
     log(u,'password_change');flash(request,'Пароль изменён');return go('/welcome')
@@ -1987,3 +1994,11 @@ def chat_reports(request:Request):
 def backup_status(request:Request):
     require(request,('admin',))
     return JSONResponse(_github_backup.status(), headers={'Cache-Control':'no-store, private'})
+
+# === UIIRMEHUB PROFILE + SUPPORT + DOCUMENTS + OWNER DM UPDATE ===
+from profile_docs_feature import install as _add_profiles_and_documents
+_add_profiles_and_documents(globals())
+from owner_dm_feature import install as _enable_owner_private_messages
+_enable_owner_private_messages(globals())
+from support_feature import install as _enable_support_inbox
+_enable_support_inbox(globals())
