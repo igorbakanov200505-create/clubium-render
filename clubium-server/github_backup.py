@@ -195,7 +195,11 @@ class GitHubEncryptedBackup:
                 for entry in files:
                     if (entry.external_attr >> 16) & 0o170000 == 0o120000:
                         raise BackupError('Encrypted backup contains a symlink.')
-                with tempfile.TemporaryDirectory(prefix='clubium-restore-') as tmp:
+                # Place staging files on the SAME filesystem as the final DB.
+                # Render's /tmp and /app/instance may live on different mounts;
+                # os.replace across mounts raises EXDEV (Invalid cross-device link).
+                self.data_dir.mkdir(parents=True, exist_ok=True)
+                with tempfile.TemporaryDirectory(prefix='.clubium-restore-', dir=self.data_dir) as tmp:
                     stage = Path(tmp)
                     for m in files:
                         dest = stage / m.filename
@@ -221,8 +225,11 @@ class GitHubEncryptedBackup:
                     for secret_file in (self.data_dir / 'secret.key',):
                         if secret_file.exists():
                             secret_file.chmod(0o600)
-        except (zipfile.BadZipFile, OSError, ValueError) as exc:
+        except (zipfile.BadZipFile, ValueError) as exc:
             raise BackupError('Invalid or damaged encrypted archive.') from exc
+        except OSError as exc:
+            # A filesystem error is not evidence that the encrypted archive is corrupt.
+            raise BackupError('Cannot write restored backup files to the data directory.') from exc
 
     def _take_snapshot(self):
         if not self.db.is_file():
